@@ -1,0 +1,8 @@
+# Environment
+*.lock
+
+# Directories
+artifacts
+logs
+exp/prototypes
+
