@@ -1,46 +1,77 @@
-import json
-import pickle
 import torch
 import os
-from core.crawler import Crawler, CrawlerConfig
-from utils.generation_utils import load_model, load_filter_models
-from utils.project_config import DEVICE, CACHE_DIR, INTERIM_DIR
-import matplotlib.pyplot as plt
+from datetime import datetime
 
-from transformers import AutoTokenizer, AutoModel, AutoModelForSeq2SeqLM
-import spacy
+from core.crawler import Crawler
+from core.crawler_config import CrawlerConfig, INITIAL_USER_MESSAGE_TEMPLATE, CRAWLER_THINKING_MESSAGES, INITIAL_TOPICS
+from core.model_utils import load_model, load_filter_models
+from core.project_config import DEVICE, CACHE_DIR, INTERIM_DIR, RESULT_DIR
 
 # Fix memory leak for embedding model
 torch.set_grad_enabled(False)
 
 
 def main():
-    # Evaluated LLM
-    model_path_deepseek = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
-    # model_path_deepseek = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+    DEBUG = False
+    
+    if DEBUG:
+        model_path_deepseek = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+        crawler_config = CrawlerConfig(
+            temperature=0.6,
+            num_samples_per_topic=1,
+            num_crawl_steps=1,
+            generation_batch_size=3,
+            max_topic_string_length=200,
+            max_generated_tokens=200,
+            max_extracted_topics_per_generation=10,
+            max_crawl_topics=10000,
+            tokenization_template="chat",
+            do_filter_refusals=True,
+            force_thought_skip=True,
+            cossim_thresh=0.9,
+        )
+    else:
+        model_path_deepseek = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+        crawler_config = CrawlerConfig(
+            temperature=0.6,
+            num_samples_per_topic=1,
+            num_crawl_steps=1000,
+            generation_batch_size=64,
+            max_topic_string_length=200,
+            max_generated_tokens=200,
+            max_extracted_topics_per_generation=10,
+            max_crawl_topics=10000,
+            tokenization_template="chat",
+            do_filter_refusals=True,
+            force_thought_skip=True,
+            cossim_thresh=0.9,
+        )
+
+
+    # Initialize models and crawler
     model_deepseek, tokenizer_deepseek = load_model(
         model_path_deepseek, device=DEVICE, cache_dir=CACHE_DIR
     )
     filter_models = load_filter_models(CACHE_DIR, DEVICE)
 
-    crawler_config = CrawlerConfig(
-        temperature=0.6,
-        num_samples_per_topic=1,
-        num_crawl_steps=1000,
-        generation_batch_size=100,
-        max_topic_string_length=200,
-        max_generated_tokens=200,
-        max_extracted_topics_per_generation=10,
-        max_crawl_topics=10000,
-        tokenization_template="chat",
-        do_filter_refusals=True,
-        force_thought_skip=True,
+    model_name = model_path_deepseek.split("/")[-1]
+    run_name = (
+        "crawler_log"
+        f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        f"_{model_name}"
+        f"_{crawler_config.num_samples_per_topic}samples"
+        f"_{crawler_config.num_crawl_steps}crawls"
+        f"_{crawler_config.do_filter_refusals}filter"
     )
+    crawler_log_filename = os.path.join(INTERIM_DIR, f"{run_name}.json")
 
     crawler = Crawler(
         crawler_config=crawler_config,
-        device=DEVICE,
+        save_filename=crawler_log_filename,
     )
+
+
+
 
     # # Test1: Generation
     # generated_texts = crawler.crawl_step_batch(
@@ -68,35 +99,26 @@ def main():
     # print(f"spacy_list\n{spacy_list}\n\n")
 
     # Test2: Crawl
-    topic_queue = crawler.crawl(
+    crawler.crawl(
+        model=model_deepseek,
+        tokenizer=tokenizer_deepseek,
+        filter_models=filter_models,
         initial_topics=INITIAL_TOPICS,
         fallback_user_message_template=INITIAL_USER_MESSAGE_TEMPLATE,
         thinking_messages=CRAWLER_THINKING_MESSAGES,
         verbose=False,
     )
-    print(topic_queue)
+    print(crawler.queue)
 
-    model_name = model_path_deepseek.split("/")[-1]
-    run_name = f"{model_name}_{crawler_config.num_samples_per_topic}samples_{crawler_config.num_crawl_steps}crawls_{crawler_config.do_filter_refusals}_filter"
-    crawler.save(f"crawler_{run_name}.json")
+    plot_filename = os.path.join(RESULT_DIR, f"{run_name}.png")
+    crawler.stats.visualize_cumulative_topic_count(plot_filename)
 
-    plt.grid(zorder=-1)
-    plt.scatter(
-        crawler.stats["num_generations"],
-        crawler.stats["num_topic_heads"],
-        label="Cumulative topics",
+    new_save_filename = os.path.join(INTERIM_DIR, f"{run_name}_v2.json")
+    new_crawler = Crawler.load(
+        load_from_filename=crawler_log_filename,
+        save_to_filename=new_save_filename,
     )
-    # plt.scatter(crawler.stats["num_generations"], crawler.stats["num_refusal_heads_thought_skip"], label="Cumulative refusals\nw/forced thought skip")
-    # plt.scatter(crawler.stats["num_generations"], crawler.stats["num_refusal_heads_standard"], label="Cumulative refusals\nw/standard template")
-    plt.title("Refusal filter is active during the crawl")
-    plt.xlabel("Number of crawl steps")
-    plt.legend()
-
-    plt.savefig(
-        os.path.join(
-            crawler_config.output_dir, f"num_generations_vs_num_topic_heads_{run_name}.png"
-        )
-    )
+    print(new_crawler.queue)
 
     # Test
 
@@ -108,5 +130,5 @@ def main():
 if __name__ == "__main__":
     main()
 
-# /share/u/can/.cache/pypoetry/virtualenvs/dpsk-tHQYQKFy-py3.12/bin/python /share/u/can/dpsk/exp/test_crawler.py
-# nohup /share/u/can/.cache/pypoetry/virtualenvs/dpsk-tHQYQKFy-py3.12/bin/python /share/u/can/dpsk/exp/test_crawler.py > /share/u/can/dpsk/logs/test_crawler_ccrefusalfilteractive.log 2>&1 &
+# /share/u/can/miniconda3/envs/dpsk_env/bin/python /share/u/can/thought_crawl/exp/run_crawler.py
+# nohup /share/u/can/miniconda3/envs/dpsk_env/bin/python /share/u/can/thought_crawl/exp/test_crawler_debug.log 2>&1 &

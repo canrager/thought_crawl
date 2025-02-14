@@ -1,4 +1,5 @@
 # Environment
+*/__pycache__/
 *.lock
 
 # Directories

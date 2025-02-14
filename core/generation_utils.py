@@ -1,7 +1,9 @@
 from typing import List, Optional
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
+from torch import Tensor
+from torch.nn import functional as F
+from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 
 from core.project_config import DEVICE, CACHE_DIR
 from core.tokenization_utils import custom_decoding, custom_batch_encoding
@@ -165,6 +167,40 @@ def batch_generate(
             generated_texts.extend(batch_generations)
 
     return generated_texts
+
+
+# Embedding related functions
+def average_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
+    """Average-pool the last hidden states of the model."""
+    last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+    return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+
+def final_token_hidden_state(
+    last_hidden_states: Tensor, attention_mask: Tensor
+) -> Tensor:
+    """Get the hidden state of the final token."""
+    return last_hidden_states[
+        torch.arange(last_hidden_states.size(0)), attention_mask.sum(dim=1) - 1, :
+    ]
+
+def batch_compute_embeddings(
+    tokenizer_emb: AutoTokenizer, model_emb: AutoModel, words: List[str]
+) -> Tensor:
+    """Embed a batch of words."""
+    batch_formatted = [f"query: {word}" for word in words]
+    batch_dict = tokenizer_emb(
+        batch_formatted, padding=True, truncation=False, return_tensors="pt"
+    )
+    batch_dict = batch_dict.to(DEVICE)
+
+    # outputs.last_hidden_state.shape (batch_size, sequence_length, hidden_size) hidden activations of the last layer
+    outputs = model_emb(**batch_dict)
+    batch_embeddings_BD = final_token_hidden_state(
+        outputs.last_hidden_state, batch_dict["attention_mask"]
+    )
+    batch_embeddings_BD = F.normalize(batch_embeddings_BD, p=2, dim=1)
+
+    return batch_embeddings_BD
 
 
 if __name__ == "__main__":

@@ -128,7 +128,9 @@ class CrawlerConfig:
     regex_filter_start_end_only: List[str] = field(
         default_factory=lambda: REGEX_FILTER_START_END_ONLY
     )
-
+    cossim_thresh: float = 0.9 # for deduplication via embedding similarity
+    load_embedding_batch_size: int = 100
+    
     # saving
     def to_dict(self):
         return self.__dict__

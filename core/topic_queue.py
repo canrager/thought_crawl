@@ -4,8 +4,8 @@ import json
 
 import torch
 from torch import Tensor
-import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModel
+
+from core.generation_utils import batch_compute_embeddings
 
 
 @dataclass
@@ -30,97 +30,60 @@ class Topic:
 
 
 class TopicQueue:
-    def __init__(self, cossim_thresh: float, do_filter_refusals: bool, device: str):
-        # Parameters
-        self.do_filter_refusals: bool = do_filter_refusals
-        self.cossim_thresh: float = cossim_thresh
-
+    def __init__(self):
         # Track clusters
         self.head_topics: List[Topic] = []
+        self.head_refusal_topics: List[Topic] = []
         self.cluster_topics: List[List[Topic]] = []
         self.cluster_cossims: List[List[float]] = []
-        self.non_refusal_topics: List[Topic] = []
 
         # Stats
         self.num_head_topics: int = 0
         self.num_topics_per_cluster: List[int] = []
-        self.num_non_refusal_topics: int = 0
+        self.num_head_refusal_topics: int = 0
         self.num_total_topics: int = 0
 
-        # Embedding similarity
-        self.head_embedding_CD: Tensor = torch.zeros(
-            0, self.model_emb.config.hidden_size, device=device
-        )  # [num_clusters, hidden_size]
-
-        # NOTE Model, Tokenizer, Device are not saved to the Object to reduce overhead
-
-    # Embedding related functions
-    def average_pool(self, last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
-        """Average-pool the last hidden states of the model."""
-        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
-        return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
-
-    def final_token_hidden_state(
-        self, last_hidden_states: Tensor, attention_mask: Tensor
-    ) -> Tensor:
-        """Get the hidden state of the final token."""
-        return last_hidden_states[
-            torch.arange(last_hidden_states.size(0)), attention_mask.sum(dim=1) - 1, :
-        ]
-
-
-
     # Adding new topics and deduplication
-    def add_new_cluster_head(self, topic: Topic, embedding_D):
+    def add_new_cluster_head(self, topic: Topic):
         """Add a new cluster head."""
         self.head_topics.append(topic)
         self.num_head_topics += 1
-        self.head_embedding_CD = torch.cat((self.head_embedding_CD, embedding_D[None, :]), dim=0)
-        self.cluster_topics.append([topic])
-        self.cluster_cossims.append([1])
+        if topic.is_refusal:
+            self.head_refusal_topics.append(topic)
+            self.num_head_refusal_topics += 1
         self.num_topics_per_cluster.append(1)
-        return topic
-
-    def append_to_cluster(self, topic: Topic, max_cossim: float, cluster_idx: int) -> Topic:
-        """Add a topic to an existing cluster."""
-        self.cluster_topics[cluster_idx].append(topic)
-        self.cluster_cossims[cluster_idx].append(max_cossim)
-        self.num_topics_per_cluster[cluster_idx] += 1
-        return topic
-
-    def add_non_refusal_topic(self, topic: Topic):
-        """Add a non-refusal topic."""
-        self.non_refusal_topics.append(topic)
-        self.num_non_refusal_topics += 1
+        self.cluster_topics.append([topic])
+        self.cluster_cossims.append([topic.cossim_to_head])  # should be 1
         self.num_total_topics += 1
         return topic
 
+    def append_to_cluster(self, topic: Topic) -> Topic:
+        """Add a topic to an existing cluster."""
+        self.cluster_topics[topic.cluster_idx].append(topic)
+        self.cluster_cossims[topic.cluster_idx].append(topic.cossim_to_head)
+        self.num_topics_per_cluster[topic.cluster_idx] += 1
+        self.num_total_topics += 1
+        return topic
 
-
-
-    def incoming_batch(self, topics: List[Topic], device: str, verbose=False) -> List[Topic]:
+    def incoming_batch(self, topics: List[Topic]) -> List[Topic]:
         """Process a batch of topics to be added to the queue with deduplication."""
         if topics == []:
             print("No topics passed.")
-            return
+            return []
 
-        batch_embeddings_BD = self.batch_embedding(topics, device)
-
-        # deduplicate and add to queue
-        # This has to be done one by one to catch duplicates within the incoming batch
-        added_head_topics = []
-        for topic, embedding_D in zip(topics, batch_embeddings_BD):
-            topic = self.process_incoming_topic(topic, embedding_D)
+        for topic in topics:
             if topic.is_head:
-                added_head_topics.append(topic)
-
-        return added_head_topics
+                self.add_new_cluster_head(topic)
+            else:
+                self.append_to_cluster(topic)
+        return topics
 
     # Saving, loading and logging
     def to_dict(self):
         """Convert the topic queue to a dictionary representation."""
         topic_dict = {
-            "queue": {
+            "topics": {
+                "head_refusal_topics": [t.to_dict() for t in self.head_refusal_topics],
                 "head_topics": [t.to_dict() for t in self.head_topics],
                 "cluster_topics": [
                     [t.to_dict() for t in cluster] for cluster in self.cluster_topics
@@ -128,12 +91,10 @@ class TopicQueue:
                 "cluster_cossims": self.cluster_cossims,
             },
             "stats": {
+                "num_head_refusal_topics": self.num_head_refusal_topics,
+                "num_head_topics": self.num_head_topics,
                 "num_topics_per_cluster": self.num_topics_per_cluster,
-                "num_clusters": self.num_head_topics,
-            },
-            "config": {
-                "cossim_thresh": self.cossim_thresh,
-                # TODO: Add model, tokenizer, device
+                "num_total_topics": self.num_total_topics,
             },
         }
         return topic_dict
@@ -146,49 +107,41 @@ class TopicQueue:
         return topic_dict
 
     @classmethod
-    def load(cls, topic_dict: dict, model_emb, tokenizer_emb, device: str) -> "TopicQueue":
+    def load(cls, topic_dict: dict) -> "TopicQueue":
         """Create a new TopicQueue from a dictionary representation."""
         # Initialize new queue
-        queue = cls(model_emb, tokenizer_emb, device)
+        queue = cls()
 
         # Set basic attributes
-        queue.cossim_thresh = topic_dict["cossim_thresh"]
-        queue.num_head_topics = topic_dict["num_clusters"]
-        queue.num_topics_per_cluster = topic_dict["num_topics_per_cluster"]
+        queue.num_head_topics = topic_dict["stats"]["num_head_topics"]
+        queue.num_head_refusal_topics = topic_dict["stats"]["num_head_refusal_topics"]
+        queue.num_topics_per_cluster = topic_dict["stats"]["num_topics_per_cluster"]
+        queue.num_total_topics = topic_dict["stats"]["num_total_topics"]
 
         # Reconstruct head topics
-        queue.head_topics = [Topic(**topic_data) for topic_data in topic_dict["head_topics"]]
-
-        # Reconstruct cluster topics
+        queue.head_topics = [
+            Topic(**topic_data) for topic_data in topic_dict["topics"]["head_topics"]
+        ]
+        queue.head_refusal_topics = [
+            Topic(**topic_data) for topic_data in topic_dict["topics"]["head_refusal_topics"]
+        ]
         queue.cluster_topics = [
             [Topic(**topic_data) for topic_data in cluster]
-            for cluster in topic_dict["cluster_topics"]
+            for cluster in topic_dict["topics"]["cluster_topics"]
         ]
-
-        # Rebuild mean embeddings tensor
-        queue.head_embedding_CD = torch.zeros(
-            queue.num_head_topics, model_emb.config.hidden_size, device=device
-        )
-
-        # Calculate mean embeddings for each cluster
-        for i, cluster in enumerate(queue.cluster_topics):
-            embeddings = queue.batch_embedding(tokenizer_emb, model_emb, cluster, device)
-            queue.head_embedding_CD[i] = embeddings.mean(dim=0)
-
+        queue.cluster_cossims = topic_dict["topics"]["cluster_cossims"]
         return queue
 
     def __repr__(self) -> str:
-        """Return a string representation of the TopicQueue showing stats, config and topics."""
+        """Return a string representation of the TopicQueue showing stats and topics."""
         string = "TopicQueue:\n\n"
 
         # Stats
         string += "Stats:\n"
         string += f"  Total Clusters: {self.num_head_topics}\n"
-        string += f"  Topics per Cluster: {self.num_topics_per_cluster}\n\n"
-
-        # Config
-        string += "Config:\n"
-        string += f"  Cosine Similarity Threshold: {self.cossim_thresh}\n\n"
+        string += f"  Topics per Cluster: {self.num_topics_per_cluster}\n"
+        string += f"  Total Refusal Topics: {self.num_head_refusal_topics}\n"
+        string += f"  Total Topics: {self.num_total_topics}\n\n"
 
         # Topics by cluster
         string += "Clusters:\n"
@@ -205,9 +158,6 @@ class TopicQueue:
             for topic in self.cluster_topics[i]:
                 if not topic.is_head:  # Skip head topic since we already showed it
                     string += f"    text='{topic.text}', raw='{topic.raw}', translation='{topic.translation}'\n"
-
-        # Total count
-        all_topics = sum(len(cluster) for cluster in self.cluster_topics)
-        string += f"\nTotal Topics: {all_topics}"
+                    string += f"    cossim_to_head: {topic.cossim_to_head}\n"
 
         return string

@@ -6,13 +6,15 @@ import json
 from typing import List, Dict, Tuple
 from copy import copy
 
+import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
 from torch.nn import functional as F
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM, AutoModel
 from spacy.language import Language
 
-from core.generation_utils import batch_generate
+from core.project_config import DEVICE
+from core.generation_utils import batch_generate, batch_compute_embeddings
 from core.topic_queue import TopicQueue, Topic
 from core.crawler_config import CrawlerConfig
 
@@ -63,6 +65,21 @@ class CrawlerStats:
             "current_step": len(self.generations_per_step),
             "largest_cluster": max(self.cluster_sizes[-1]) if self.cluster_sizes else 0,
         }
+    
+    def visualize_cumulative_topic_count(self, filename: str):
+        cumulative_steps = torch.cumsum(torch.tensor(self.topics_per_step), dim=0)
+        cumulative_topics = torch.cumsum(torch.tensor(self.topics_per_step), dim=0)
+        cumulative_refusals = torch.cumsum(torch.tensor(self.refusals_per_step), dim=0)
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        plt.grid(zorder=-1)
+        ax.scatter(cumulative_steps, cumulative_topics, label="Cumulative topics", zorder=10)
+        ax.scatter(cumulative_steps, cumulative_refusals, label="Cumulative refusals", zorder=10)
+        ax.set_xlabel("Cumulative steps")
+        ax.set_ylabel("Cumulative count")
+        ax.set_title("Cumulative topic and refusal count")
+        ax.legend()
+        plt.savefig(filename)
 
     def to_dict(self):
         """Convert the crawler stats to a dictionary representation."""
@@ -90,11 +107,8 @@ class CrawlerStats:
         return stats_dict
 
     @classmethod
-    def load(cls, filename: str):
-        """Load the crawler stats from a JSON file."""
-        with open(filename, "r") as f:
-            stats_dict = json.load(f)
-
+    def load(cls, stats_dict: dict):
+        """Load the crawler stats from a dictionary."""
         crawler_stats = cls()
         crawler_stats.total_generations = stats_dict["cumulative"]["total_generations"]
         crawler_stats.total_topics = stats_dict["cumulative"]["total_topics"]
@@ -109,16 +123,14 @@ class Crawler:
     def __init__(
         self,
         crawler_config: CrawlerConfig,
-        save_filename: str,
-        device: str,
+        save_filename: str
     ) -> None:
 
         self.config = crawler_config
-        self.queue = TopicQueue(
-            cossim_thresh=self.config.cossim_thresh,
-            do_filter_refusals=self.config.do_filter_refusals,
-            device=device,
-        )
+        self.queue = TopicQueue()
+        self.head_embedding_CD: Tensor = None # will be initialized in initialize_head_embeddings
+        # NOTE Model, Tokenizer, Device are not saved to the Object to reduce overhead
+
         self.stats = CrawlerStats()
 
         self.save_filename = save_filename
@@ -153,8 +165,9 @@ class Crawler:
         # translate the subset with chinese characters in a single batch
         zh_en_ids = tokenizer_zh_en(
             chinese_texts, padding=True, truncation=True, return_tensors="pt"
-        ).to(self.device)
-        translated_ids = model_zh_en.generate(**zh_en_ids)
+        ).to(DEVICE)
+        with torch.inference_mode():
+            translated_ids = model_zh_en.generate(**zh_en_ids)
         translated_str = tokenizer_zh_en.batch_decode(translated_ids, skip_special_tokens=True)
 
         # match translations to full text
@@ -266,74 +279,96 @@ class Crawler:
                     formatted_topics.append(topic)
         return formatted_topics
     
-    def _batch_compute_embeddings(
-        self, tokenizer_emb: AutoTokenizer, model_emb: AutoModel, topics: List[Topic], device: str
-    ) -> Tensor:
-        """Embed a batch of topics."""
-        batch_formatted = [f"query: {t.text}" for t in topics]
-        batch_dict = tokenizer_emb(
-            batch_formatted, padding=True, truncation=False, return_tensors="pt"
-        )
-        batch_dict = batch_dict.to(device)
+    def initialize_head_embeddings(self, model_emb: AutoModel, tokenizer_emb: AutoTokenizer):
+        self.head_embedding_CD = torch.zeros(
+            0, model_emb.config.hidden_size, device=DEVICE
+        )  # [num_head_topics, hidden_size]
+        for batch_start in range(0, self.queue.num_head_topics, self.config.load_embedding_batch_size):
+            batch_end = min(batch_start + self.config.load_embedding_batch_size, self.queue.num_head_topics)
+            batch_topics = self.queue.head_topics[batch_start:batch_end]
+            batch_embeddings = batch_compute_embeddings(tokenizer_emb, model_emb, [t.text for t in batch_topics])
+            self.head_embedding_CD = torch.cat(
+                (self.head_embedding_CD, batch_embeddings), dim=0
+            )
 
-        # outputs.last_hidden_state.shape (batch_size, sequence_length, hidden_size) hidden activations of the last layer
-        outputs = model_emb(**batch_dict)
-        batch_embeddings_BD = self.final_token_hidden_state(
-            outputs.last_hidden_state, batch_dict["attention_mask"]
-        )
-        batch_embeddings_BD = F.normalize(batch_embeddings_BD, p=2, dim=1)
+    def deduplicate_by_embedding_cossim(
+        self,
+        tokenizer_emb: AutoTokenizer,
+        model_emb: AutoModel,
+        formatted_topics: List[Topic],
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        """Finds novel head topics in incoming batch and updates the self.queue.head_embedding. New topics are marked as heads."""
+        if self.head_embedding_CD is None: # Initializing it here so we don't have to pass in model_emb and device to the __init__ method
+            self.initialize_head_embeddings(model_emb, tokenizer_emb)
+        
+        formatted_text = [t.text for t in formatted_topics]
 
-        return batch_embeddings_BD
-    
-    def _compute_embedding_cossim(self, embedding_BD: Tensor) -> Topic:
-        # compute cosine sim with cluster means
-        # Find heads w.r.t queue
-        cossim_queue_BC = embedding_BD @ self.queue.head_embedding_CD.T
-        is_head_queue_B = cossim_queue_BC.max(dim=-1) < self.queue.cossim_thresh # TODO if the whole embedding logic is moved over, we can  move mean embedding and cossim thresh over into the crawler class
+        with torch.inference_mode():
+            batch_embeddings_BD = batch_compute_embeddings(
+                tokenizer_emb, model_emb, formatted_text
+            )
 
-        # Find the heads wrt. batch
-        cossim_batch_BB = embedding_BD @ embedding_BD.T
-        cossim_batch_tril_BB = torch.tril(cossim_batch_BB, diagonal=-1)
-        is_head_batch_B = cossim_batch_tril_BB < self.queue.cossim_thresh
+            # Update topic
+            for topic, embedding_D in zip(formatted_topics, batch_embeddings_BD):
+                cossim_C = embedding_D @ self.head_embedding_CD.T
+                max_cossim, cluster_idx = torch.max(cossim_C, dim=-1)
+                is_head = max_cossim < self.config.cossim_thresh
+                topic.cluster_idx = cluster_idx.item()
+                topic.cossim_to_head = max_cossim.item()
+                topic.is_head = is_head.item()
+        
+        #  # compute cosine sim with cluster means
+        # # Find heads w.r.t queue
+        # cossim_queue_BC = batch_embeddings_BD @ self.head_embedding_CD.T
+        # is_head_queue_B = (
+        #     cossim_queue_BC.max(dim=-1).values < self.config.cossim_thresh
+        # )
 
-        # Update list of head embeddings
-        is_head_B = is_head_queue_B & is_head_batch_B
-        new_head_embeddings = embedding_BD[is_head_B]
-        self.queue.head_embedding_CD = torch.cat((self.queue.head_embedding_CD, new_head_embeddings), dim=0)
+        # # Find the heads wrt. batch
+        # cossim_batch_BB = batch_embeddings_BD @ batch_embeddings_BD.T
+        # cossim_batch_tril_BB = torch.tril(cossim_batch_BB, diagonal=-1)
+        # is_head_batch_B = torch.all(cossim_batch_tril_BB < self.config.cossim_thresh, dim=-1)
 
-        # Assign duplicates to clusters
-        cossim_BC = embedding_BD @ self.queue.head_embedding_CD.T # importantly, queue contains the new heads now!
-        max_cossim_B, max_cossim_idx_B = torch.max(cossim_BC, dim=-1)
-        return max_cossim_B, max_cossim_idx_B, is_head_B
+        # # Update list of head embeddings
+        # is_head_B = is_head_queue_B & is_head_batch_B
+        # new_head_embeddings = batch_embeddings_BD[is_head_B]
+        # self.head_embedding_CD = torch.cat(
+        #     (self.head_embedding_CD, new_head_embeddings), dim=0
+        # )
 
-    def deduplicate(self, tokenizer_emb: AutoTokenizer, model_emb: AutoModel, formatted_topics: List[Topic], device: str) -> Tuple[Tensor, Tensor, Tensor]:
-        """Finds novel head topics in incoming batch and updates the self.queue.head_embedding"""
-        batch_embeddings_BD = self._batch_compute_embeddings(tokenizer_emb, model_emb, formatted_topics, device)
-        max_cossim_B, max_cossim_idx_B, is_head_B = self._compute_embedding_cossim(batch_embeddings_BD)
-        return max_cossim_B, max_cossim_idx_B, is_head_B
-    
+        # # Assign duplicates to clusters
+        # cossim_BC = (
+        #     batch_embeddings_BD @ self.head_embedding_CD.T
+        # )  # importantly, queue contains the new heads now!
+        # max_cossim_B, cluster_idx_B = torch.max(cossim_BC, dim=-1)
+
+        
+
+        return formatted_topics
+
     def is_refusal(self, text: str) -> bool:
         return any(refusal.lower() in text.lower() for refusal in self.config.refusal_messages)
 
-    def filter_for_refusal(
+    def check_refusal(
         self,
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
         selected_topics: List[Topic],
         user_message_templates: List[List[str]],
-        assistant_prefill: str = "",
-        thinking_mesage: str = "",
         force_thought_skip: bool = False,
         verbose: bool = False,
     ) -> List[Topic]:
         """Filtering incoming head topics for refusals."""
 
         if selected_topics == []:
-            return []
+            return selected_topics
+        
+        head_topics_raw = [t.raw for t in selected_topics if t.is_head]
+        if len(head_topics_raw) == 0:
+            return selected_topics
 
         # Preparation
-        topic_str = [t.raw for t in selected_topics]
-        refusals = torch.zeros(len(selected_topics))
+        refusals = torch.zeros(len(head_topics_raw))
         flattened_templates = []
         for template_pair in user_message_templates:
             flattened_templates.extend(template_pair)
@@ -343,10 +378,8 @@ class Crawler:
             generated_texts = batch_generate(
                 model,
                 tokenizer,
-                topic_str,
+                head_topics_raw,
                 template,
-                assistant_prefill,
-                thinking_mesage,
                 force_thought_skip=force_thought_skip,
                 verbose=False,
             )
@@ -361,14 +394,42 @@ class Crawler:
                         print(f"the following is a refusal: {bool(is_refusal)}")
                         print(gen)
 
-        # Average refusal rate across templates
-        refusals /= len(user_message_templates)
-
-        # Return topics with majority refusal rate
-        refused_topics = [
-            topic for topic, refusal in zip(selected_topics, refusals) if refusal >= 0.5
-        ]
-        return refused_topics
+        majority_refusal_count = 0.5 * len(user_message_templates)
+        refusals = iter(refusals)
+        for topic in selected_topics:
+            if topic.is_head:
+                if next(refusals) >= majority_refusal_count:
+                    topic.is_refusal = True
+                else:
+                    topic.is_refusal = False
+        return selected_topics
+    
+    def initialize_initial_topics(
+        self,
+        model: AutoModelForCausalLM,
+        tokenizer: AutoTokenizer,
+        initial_topics: List[str],
+    ) -> List[Topic]:
+        """Initialize all initial topics as heads."""
+        topics = []
+        for i, topic_str in enumerate(initial_topics):
+            topics.append(Topic(
+                text=topic_str,
+                raw=topic_str,
+                is_head=True,
+                cluster_idx=i,
+                cossim_to_head=1.0,
+                is_refusal=None, # will be checked immediately below
+            ))
+        topics = self.check_refusal(
+            model=model,
+            tokenizer=tokenizer,
+            selected_topics=topics,
+            user_message_templates=self.config.user_message_templates,
+            force_thought_skip=self.config.force_thought_skip,
+        )
+        self.queue.incoming_batch(topics)
+        return topics
 
     def crawl(
         self,
@@ -382,18 +443,26 @@ class Crawler:
         verbose: bool = False,
     ) -> List[str]:
 
-        initial_topics = [Topic(text=t) for t in initial_topics]
-        self.queue.incoming_batch(initial_topics)
+        self.initialize_initial_topics(
+            model=model,
+            tokenizer=tokenizer,
+            initial_topics=initial_topics,
+        )
+        
+        if self.config.do_filter_refusals:
+                topic_seed_candidates = self.queue.head_refusal_topics
+        else:
+            topic_seed_candidates = self.queue.head_topics
 
         for crawl_step_idx in trange(self.config.num_crawl_steps, desc="Crawling topics"):
             # Get batch of topics
-            if self.queue.num_head_topics < self.config.generation_batch_size:
+            if len(topic_seed_candidates) <= self.config.generation_batch_size:
                 # Early stage filling the queue
-                batch_topics = self.queue.head_topics
+                batch_topics = topic_seed_candidates
             else:
                 # Randomly sample for topic diversity
                 batch_topics = random.sample(
-                    self.queue.head_topics, self.config.generation_batch_size
+                    topic_seed_candidates, self.config.generation_batch_size
                 )
             batch_topics = [t.text for t in batch_topics]
 
@@ -411,8 +480,8 @@ class Crawler:
                 for thinking_message in thinking_messages:
                     print(f"generating...")
                     generated_texts = batch_generate(
-                        self.model,
-                        self.tokenizer,
+                        model,
+                        tokenizer,
                         batch_topics,
                         user_message_template=template,
                         assistant_prefill=assistant_prefill,
@@ -426,62 +495,51 @@ class Crawler:
 
                     print(f"formatting...")
                     new_topics = self.extract_and_format(
-                        filter_models["model_zh_en"],
-                        filter_models["tokenizer_zh_en"],
-                        filter_models["model_spacy_en"],
-                        generated_texts,
+                        model_zh_en=filter_models["model_zh_en"],
+                        tokenizer_zh_en=filter_models["tokenizer_zh_en"],
+                        model_spacy_en=filter_models["model_spacy_en"],
+                        generations=generated_texts,
+                    )
+
+                    print(f"deduplicating...")
+                    new_topics = self.deduplicate_by_embedding_cossim(
+                        tokenizer_emb=filter_models["tokenizer_emb"],
+                        model_emb=filter_models["model_emb"],
+                        formatted_topics=new_topics,
                     )
 
                     if self.config.do_filter_refusals:
                         print(f"filtering for refusal...")
-                        new_topics = self.filter_for_refusal(
-                            new_topics,
-                            self.config.user_message_templates,
+                        new_topics = self.check_refusal(
+                            model=model,
+                            tokenizer=tokenizer,
+                            selected_topics=new_topics,
+                            user_message_templates=self.config.user_message_templates,
                             force_thought_skip=self.config.force_thought_skip,
                             verbose=False,
                         )
+
+                    # Update queue
+                    self.queue.incoming_batch(new_topics)
                     if verbose:
                         for topic in new_topics:
                             print(
                                 f"new topic from crawl step {crawl_step_idx}:\n{topic.text}\n{topic.raw}\n{topic.translation}\n\n"
                             )
 
-                    print("deduplicating by embedding similarity...")
-                    added_topics = self.queue.incoming_batch(new_topics)
-
-                    if not self.config.do_filter_refusals:
-                        print(f"evaluating added topics for refusals...")
-                        added_and_refused_forced = self.filter_for_refusal(
-                            added_topics,
-                            self.config.user_message_templates,
-                            force_thought_skip=True,
-                            verbose=False,
-                        )
-                        self.stats["num_refusal_heads_thought_skip"].append(
-                            len(added_and_refused_forced)
-                            + self.stats["num_refusal_heads_thought_skip"][-1]
-                        )
-                        added_and_refused_standard = self.filter_for_refusal(
-                            added_topics,
-                            self.config.user_message_templates,
-                            force_thought_skip=False,
-                            verbose=False,
-                        )
-                        self.stats["num_refusal_heads_standard"].append(
-                            len(added_and_refused_standard)
-                            + self.stats["num_refusal_heads_standard"][-1]
-                        )
-
-                    self.stats["num_generations"].append(
-                        len(batch_topics) + self.stats["num_generations"][-1]
+                    # Log stats
+                    self.stats.log_step(
+                        new_generations=len(generated_texts),
+                        new_topics=len(new_topics),
+                        new_refusals=sum(1 for t in new_topics if t.is_refusal),
+                        current_clusters=self.queue.cluster_topics,
                     )
-                    self.stats["num_topic_heads"].append(self.queue.num_head_topics)
 
             if crawl_step_idx % 10 == 0:
                 self.save(self.save_filename)
-            # if self.topic_queue.num_clusters > self.config.max_crawl_topics:
-            #     print(f"Topic queue has {len(self.topic_queue.num_clusters)} topics")
-            #     break
+            if self.queue.num_head_topics > self.config.max_crawl_topics:
+                print(f"Topic queue has {len(self.queue.head_topics)} topics")
+                break
 
         self.save(self.save_filename)
         return self.queue
@@ -501,14 +559,13 @@ class Crawler:
         return crawler_dict
 
     @classmethod
-    def load(cls, filename: str, device: str):
-        with open(filename, "r") as f:
+    def load(cls, load_from_filename: str, save_to_filename: str):
+        with open(load_from_filename, "r") as f:
             crawler_dict = json.load(f)
 
-        crawler = cls(crawler_dict["config"], device)
-        crawler.queue = TopicQueue.load(
-            crawler_dict["queue"], crawler.model, crawler.tokenizer, device
-        )
+        crawler_config = CrawlerConfig(**crawler_dict["config"])
+        crawler = cls(crawler_config, save_to_filename)
+        crawler.queue = TopicQueue.load(crawler_dict["queue"])
         crawler.stats = CrawlerStats.load(crawler_dict["stats"])
         return crawler
 
