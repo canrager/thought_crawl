@@ -1,6 +1,6 @@
 from transformers import AutoTokenizer
 import torch
-from typing import Optional, List, Dict
+from typing import List, Dict
 
 
 SPECIAL_TOKEN_MAP = {
@@ -84,7 +84,7 @@ def custom_encoding(
     if assistant_prefill != "":
         assert template == "chat", "Assistant prefix is only supported for chat template"
         assistant_prefill_tokens = tokenizer.encode(assistant_prefill, add_special_tokens=False)
-        token_ids = token_ids + assistant_prefill_tokens + [st["THINK_START"]] + [st["NEWLINE"]]
+        token_ids = token_ids + assistant_prefill_tokens # + [st["THINK_START"]] + [st["NEWLINE"]]
 
     # Optionally prefill thinking tokens
     if len(thinking_message) > 0:

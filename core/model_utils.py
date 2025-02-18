@@ -58,10 +58,10 @@ def load_filter_models(cache_dir: str, device: str):
 
     # Text embedding for measuring semantic similarity
     tokenizer_emb = AutoTokenizer.from_pretrained(
-        "intfloat/multilingual-e5-large", cache_dir=cache_dir
+        "intfloat/multilingual-e5-large-instruct", cache_dir=cache_dir
     )
     model_emb = AutoModel.from_pretrained(
-        "intfloat/multilingual-e5-large",
+        "intfloat/multilingual-e5-large-instruct",
         cache_dir=cache_dir,
         device_map=device,
         # torch_dtype=torch.bfloat16,

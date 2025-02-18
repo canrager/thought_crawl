@@ -1,4 +1,5 @@
 from typing import List, Optional
+from tqdm import trange
 
 import torch
 from torch import Tensor
@@ -127,7 +128,7 @@ def batch_generate(
     model,
     tokenizer,
     selected_topics: List[str],
-    user_message_template: str,
+    user_message_template: str = "{}",
     assistant_prefill: str = "",
     thinking_message: str = "",
     force_thought_skip: bool = False,
@@ -136,6 +137,7 @@ def batch_generate(
     max_new_tokens: int = 150,
     temperature: float = 0.6,
     verbose: bool = False,
+    skip_special_tokens: bool = False,
 ) -> List[str]:
     """Given a list of seed topics, return a list of raw model generations,
     self.config.num_samples_per_topic determines number of generations for identical input topics.
@@ -163,9 +165,12 @@ def batch_generate(
                 max_generation_length=None,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
+                skip_special_tokens=skip_special_tokens,
             )
             generated_texts.extend(batch_generations)
 
+    if verbose:
+        print(f"full generation:\n{generated_texts}\n\n")
     return generated_texts
 
 
@@ -175,22 +180,20 @@ def average_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
     return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
-def final_token_hidden_state(
-    last_hidden_states: Tensor, attention_mask: Tensor
-) -> Tensor:
+
+def final_token_hidden_state(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     """Get the hidden state of the final token."""
     return last_hidden_states[
         torch.arange(last_hidden_states.size(0)), attention_mask.sum(dim=1) - 1, :
     ]
 
-def batch_compute_embeddings(
-    tokenizer_emb: AutoTokenizer, model_emb: AutoModel, words: List[str]
+
+def compute_embeddings(
+    tokenizer_emb: AutoTokenizer, model_emb: AutoModel, words: List[str], prefix: str = "query: "
 ) -> Tensor:
     """Embed a batch of words."""
-    batch_formatted = [f"query: {word}" for word in words]
-    batch_dict = tokenizer_emb(
-        batch_formatted, padding=True, truncation=False, return_tensors="pt"
-    )
+    batch_formatted = [f"{prefix}{word.lower()}" for word in words]
+    batch_dict = tokenizer_emb(batch_formatted, padding=True, truncation=False, return_tensors="pt")
     batch_dict = batch_dict.to(DEVICE)
 
     # outputs.last_hidden_state.shape (batch_size, sequence_length, hidden_size) hidden activations of the last layer
@@ -200,6 +203,24 @@ def batch_compute_embeddings(
     )
     batch_embeddings_BD = F.normalize(batch_embeddings_BD, p=2, dim=1)
 
+    return batch_embeddings_BD
+
+
+def batch_compute_embeddings(
+    tokenizer_emb: AutoTokenizer,
+    model_emb: AutoModel,
+    words: List[str],
+    batch_size: int = 100,
+    prefix: str = "query: ",
+) -> Tensor:
+    """Embed a batch of words."""
+    batch_embeddings_BD = []
+    for i in trange(0, len(words), batch_size):
+        batch_words = words[i : i + batch_size]
+        batch_embeddings_BD.append(
+            compute_embeddings(tokenizer_emb, model_emb, batch_words, prefix=prefix)
+        )
+    batch_embeddings_BD = torch.cat(batch_embeddings_BD, dim=0)
     return batch_embeddings_BD
 
 

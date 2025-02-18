@@ -5,7 +5,7 @@ import json
 import torch
 from torch import Tensor
 
-from core.generation_utils import batch_compute_embeddings
+from core.generation_utils import compute_embeddings
 
 
 @dataclass
