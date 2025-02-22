@@ -6,6 +6,8 @@ import json
 from typing import List, Dict, Tuple
 from copy import copy
 
+from datetime import datetime
+
 import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
@@ -291,22 +293,6 @@ class Crawler:
             print(f"formatted topics:\n{formatted_topics}\n\n")
         return formatted_topics
 
-    def initialize_head_embeddings(self, model_emb: AutoModel, tokenizer_emb: AutoTokenizer):
-        self.head_embedding_CD = torch.zeros(
-            0, model_emb.config.hidden_size, device=DEVICE
-        )  # [num_head_topics, hidden_size]
-        for batch_start in range(
-            0, self.queue.num_head_topics, self.config.load_embedding_batch_size
-        ):
-            batch_end = min(
-                batch_start + self.config.load_embedding_batch_size, self.queue.num_head_topics
-            )
-            batch_topics = self.queue.head_topics[batch_start:batch_end]
-            batch_embeddings = compute_embeddings(
-                tokenizer_emb, model_emb, [t.text for t in batch_topics]
-            )
-            self.head_embedding_CD = torch.cat((self.head_embedding_CD, batch_embeddings), dim=0)
-
     def deduplicate_by_embedding_cossim(
         self,
         tokenizer_emb: AutoTokenizer,
@@ -429,8 +415,23 @@ class Crawler:
                 else:
                     topic.is_refusal = False
         return selected_topics
+    
+    def batch_check_refusal(
+        self,
+        model: AutoModelForCausalLM,
+        tokenizer: AutoTokenizer,
+        topics: List[Topic],
+        verbose: bool = False,
+    ) -> List[Topic]:
+        """Check if the topics are refusals."""
+        for batch_start in trange(0, len(topics), self.config.generation_batch_size, desc="Checking refusals"):
+            batch_topics = topics[batch_start:batch_start + self.config.generation_batch_size]
+            topics = self.check_refusal(
+                model, tokenizer, batch_topics, self.config.user_message_templates, self.config.do_force_thought_skip, verbose
+            )
+        return topics
 
-    def initialize_initial_topics(
+    def initialize_topics(
         self,
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
@@ -458,6 +459,22 @@ class Crawler:
         )
         self.queue.incoming_batch(topics)
         return topics
+    
+    def initialize_head_embeddings(self, model_emb: AutoModel, tokenizer_emb: AutoTokenizer):
+        self.head_embedding_CD = torch.zeros(
+            0, model_emb.config.hidden_size, device=DEVICE
+        )  # [num_head_topics, hidden_size]
+        for batch_start in range(
+            0, self.queue.num_head_topics, self.config.load_embedding_batch_size
+        ):
+            batch_end = min(
+                batch_start + self.config.load_embedding_batch_size, self.queue.num_head_topics
+            )
+            batch_topics = self.queue.head_topics[batch_start:batch_end]
+            batch_embeddings = compute_embeddings(
+                tokenizer_emb, model_emb, [t.text for t in batch_topics]
+            )
+            self.head_embedding_CD = torch.cat((self.head_embedding_CD, batch_embeddings), dim=0)
 
     def crawl(
         self,
@@ -469,7 +486,7 @@ class Crawler:
         """Crawl the topics."""
 
         if self.config.initial_topics:
-            self.initialize_initial_topics(
+            self.initialize_topics(
                 model=model,
                 tokenizer=tokenizer,
                 initial_topics=self.config.initial_topics,
@@ -580,9 +597,9 @@ class Crawler:
 
     def to_dict(self):
         crawler_dict = {
-            "queue": self.queue.to_dict(),
             "stats": self.stats.to_dict(),
             "config": self.config.to_dict(),
+            "queue": self.queue.to_dict(),
         }
         return crawler_dict
 
@@ -602,6 +619,8 @@ class Crawler:
         crawler.queue = TopicQueue.load(crawler_dict["queue"])
         crawler.stats = CrawlerStats.load(crawler_dict["stats"])
         return crawler
+    
+    
 
     # NOTE: Needs update, potentially move to another experiment class
     # def _batch_generate_and_process(
@@ -746,3 +765,16 @@ class Crawler:
     #     topic_dict["device"] = self.device
     #     with open(os.path.join(self.config.output_dir, filename), "w", encoding="utf-8") as f:
     #         json.dump(topic_dict, f)
+
+
+def get_run_name(model_path: str, crawler_config: CrawlerConfig):
+    model_name = model_path.split("/")[-1]
+    run_name = (
+        "crawler_log"
+        f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        f"_{model_name}"
+        f"_{crawler_config.num_samples_per_topic}samples"
+        f"_{crawler_config.num_crawl_steps}crawls"
+        f"_{crawler_config.do_filter_refusals}filter"
+    )
+    return run_name
