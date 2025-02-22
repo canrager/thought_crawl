@@ -160,44 +160,41 @@ class Crawler:
         return bool(self.chinese_pattern.search(text))
 
     def _translate_chinese_english(
-        self, model_zh_en: AutoModelForSeq2SeqLM, tokenizer_zh_en: AutoTokenizer, texts: List[str]
-    ) -> List[str]:
-        """Given a list of texts, translate the texts with chinese characters to english."""
+        self, model_zh_en: AutoModelForSeq2SeqLM, tokenizer_zh_en: AutoTokenizer, topics: List[Topic]
+    ) -> Tuple[List[bool], List[str], List[str]]:
+        """Given a list of texts, translate the texts with chinese characters to english. Do not translate others.
+        Changes the order of topics in the batch to [english] + [chinese]"""
         # check for chinese characters
-        is_chinese_B, chinese_texts = [], []
-        for text in texts:
-            is_chinese = self._has_chinese(text)
-            is_chinese_B.append(is_chinese)
-            if is_chinese:
-                chinese_texts.append(text)
-
-        if sum(is_chinese_B) < 1:
-            return copy(texts)
+        chinese_topics, topic_indices = [], []
+        for i, topic in enumerate(topics):
+            topic.is_chinese = self._has_chinese(topic.raw)
+            if topic.is_chinese:
+                chinese_topics.append(topic)
+                topic_indices.append(i)
 
         # translate the subset with chinese characters in a single batch
-        zh_en_ids = tokenizer_zh_en(
-            chinese_texts, padding=True, truncation=True, return_tensors="pt"
-        ).to(DEVICE)
-        with torch.inference_mode():
-            translated_ids = model_zh_en.generate(**zh_en_ids)
-        translated_str = tokenizer_zh_en.batch_decode(translated_ids, skip_special_tokens=True)
+        for batch_start in range(0, len(chinese_topics), self.config.generation_batch_size):
+            batch_end = batch_start + self.config.generation_batch_size
+            chinese_topic_B = chinese_topics[batch_start:batch_end]
+            topic_indices_B = topic_indices[batch_start:batch_end]
+            chinese_raw_B = [t.raw for t in chinese_topic_B]
+            zh_en_ids_B = tokenizer_zh_en(
+                chinese_raw_B, padding=True, truncation=True, return_tensors="pt"
+            ).to(DEVICE)
+            with torch.inference_mode():
+                translated_ids_B = model_zh_en.generate(**zh_en_ids_B)
+            translated_str_B = tokenizer_zh_en.batch_decode(translated_ids_B, skip_special_tokens=True)
+            for translation, idx in zip(translated_str_B, topic_indices_B):
+                topics[idx].translation = translation
 
-        # match translations to full text
-        texts_with_translations = [""] * len(texts)
-        translations = iter(translated_str)
-        for i, is_chinese in enumerate(is_chinese_B):
-            if is_chinese:
-                texts_with_translations[i] = next(translations)
-            else:
-                texts_with_translations[i] = texts[i]
-        return texts_with_translations
+        return topics
 
     def _semantic_filter(self, model_spacy_en: Language, texts: List[str]) -> List[str]:
         filtered_texts = []
         for text in texts:
             doc = model_spacy_en(text)
             meaningful_tokens = [
-                token.text for token in doc if token.tag_[:2] in self.config.allowed_spacy_tags
+                token.text for token in doc if token.tag_[:2] in set(self.config.allowed_spacy_tags)
             ]
             filtered_texts.append(" ".join(meaningful_tokens))
         return filtered_texts
@@ -240,14 +237,14 @@ class Crawler:
             # duplicate removal
             words = list(
                 dict.fromkeys(
-                    word for word in text.split() if word not in self.config.regex_filter_global
+                    word for word in text.split() if word not in set(self.config.regex_filter_global)
                 )
             )
 
             # Remove filtered words from start and end
-            while words and words[0] in self.config.regex_filter_start_end_only:
+            while words and words[0] in set(self.config.regex_filter_start_end_only):
                 words.pop(0)
-            while words and words[-1] in self.config.regex_filter_start_end_only:
+            while words and words[-1] in set(self.config.regex_filter_start_end_only):
                 words.pop()
 
             if words:
@@ -272,24 +269,27 @@ class Crawler:
         verbose: bool = False,
     ) -> List[Topic]:
         formatted_topics = []
-        for gen in generations:
-            extracted_list = self._extract_from_numbered_list(gen)
-            if extracted_list == []:
-                print(f"Warning. No topics found in this generation:\n{gen}\n\n")
-                continue
-            translated_list = self._translate_chinese_english(
-                model_zh_en, tokenizer_zh_en, extracted_list
-            )
-            regex_list = self._regex_filter(translated_list)
-            spacy_list = self._semantic_filter(model_spacy_en, regex_list)
-            filtered_list = self._remove_words(spacy_list)
-            splitted_list = self._split_at_comma(filtered_list)
-            for topic_split, raw, translated in zip(splitted_list, extracted_list, translated_list):
-                for topic_text in topic_split:
-                    if raw == translated:
-                        translated = None
-                    topic = Topic(text=topic_text, raw=raw, translation=translated)
-                    formatted_topics.append(topic)
+        extracted_topics = [
+            Topic(text=None, raw=item, translation=None) 
+            for gen in generations 
+            for item in self._extract_from_numbered_list(gen)
+        ]
+        if len(extracted_topics) == 0:
+            print(f"Warning. No topics found in this generation:\n{generations}\n\n")
+            return []
+        
+        translated_topics = self._translate_chinese_english(model_zh_en, tokenizer_zh_en, extracted_topics)
+        regex_items = self._regex_filter(translated_items)
+        spacy_items = self._semantic_filter(model_spacy_en, regex_items)
+        filtered_items = self._remove_words(spacy_items)
+        splitted_items = self._split_at_comma(filtered_items)
+
+        for topic_split, raw, translated in zip(splitted_items, extracted_items, translated_items):
+            for topic_text in topic_split:
+                if raw == translated:
+                    translated = None
+                topic = Topic(text=topic_text, raw=raw, translation=translated)
+                formatted_topics.append(topic)
 
         if verbose:
             print(f"formatted topics:\n{formatted_topics}\n\n")
@@ -360,7 +360,7 @@ class Crawler:
         # max_cossim_B, cluster_idx_B = torch.max(cossim_BC, dim=-1)
 
     def is_refusal(self, text: str) -> bool:
-        return any(refusal.lower() in text.lower() for refusal in self.config.refusal_messages)
+        return any(refusal.lower() in text.lower() for refusal in set(self.config.refusal_messages))
 
     def check_refusal(
         self,
