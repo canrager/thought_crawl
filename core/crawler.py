@@ -143,19 +143,21 @@ class Crawler:
 
         self.stats = CrawlerStats()
 
+        self.numbered_list_pattern = re.compile(r"\d+\.\s*(.*?)(?:\n|$)")
+        self.chinese_pattern = re.compile(r"[\u4e00-\u9fff]")
+
         self.save_filename = save_filename
         self.save(save_filename)  # Already testing at initialization whether saving works
 
     def _extract_from_numbered_list(self, text: str) -> List[str]:
         """Extract topics from a text that contains a numbered list."""
-        pattern = r"\d+\.\s*(.*?)(?:\n|$)"
-        extracted_list = re.findall(pattern, text)
+        extracted_list = self.numbered_list_pattern.findall(text)
         extracted_list = list(dict.fromkeys(extracted_list))  # Remove exact duplicates
         return extracted_list
 
     def _has_chinese(self, text: str) -> bool:
         """Check if the text contains Chinese characters."""
-        return bool(re.compile(r"[\u4e00-\u9fff]").search(text))
+        return bool(self.chinese_pattern.search(text))
 
     def _translate_chinese_english(
         self, model_zh_en: AutoModelForSeq2SeqLM, tokenizer_zh_en: AutoTokenizer, texts: List[str]
