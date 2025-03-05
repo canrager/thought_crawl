@@ -4,7 +4,7 @@ import random
 from typing import List, Dict
 import torch
 from datetime import datetime
-from core.project_config import INTERIM_DIR, RESULT_DIR, CACHE_DIR, DEVICE
+from core.project_config import INTERIM_DIR, RESULT_DIR
 from core.model_utils import load_model
 from core.ranking import (
     WinCountRanking,
@@ -17,6 +17,8 @@ from core.ranking_eval import RankingEvaluator, RankingTracker
 # Experiment Configuration
 CONFIG = {
     "model_name": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "device": "cuda:0",
+    "cache_dir": "/share/u/models/",
     "num_runs": 1,  # Number of times to repeat the experiment
     "num_topics": None,  # Number of topics to rank
     "num_comparisons": 100_000,  # Number of comparisons per run
@@ -65,7 +67,7 @@ def setup_experiment():
 
     # Load model and tokenizer
     print(f"Loading model {CONFIG['model_name']}...")
-    model, tokenizer = load_model(CONFIG["model_name"], device=DEVICE, cache_dir=CACHE_DIR)
+    model, tokenizer = load_model(CONFIG["model_name"], device=CONFIG["device"], cache_dir=CONFIG["cache_dir"])
 
     # Load topics
     crawl_fname = (

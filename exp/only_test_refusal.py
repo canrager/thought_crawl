@@ -13,7 +13,6 @@ from core.project_config import INTERIM_DIR, RESULT_DIR, INPUT_DIR
 from core.crawler import Crawler, get_run_name
 from core.crawler_config import CrawlerConfig, USER_MESSAGE_TEMPLATES_DETAILED
 from core.model_utils import load_model
-from core.project_config import DEVICE, CACHE_DIR
 
 
 # %%
@@ -86,6 +85,8 @@ def local_evaluation():
     # %%
     verbose = False
     quantization_bits = 4
+    DEVICE = "cuda:0"
+    CACHE_DIR = "/share/u/models/"
 
     model_deepseek, tokenizer_deepseek = load_model(
         model_path_deepseek, device=DEVICE, cache_dir=CACHE_DIR, quantization_bits=quantization_bits

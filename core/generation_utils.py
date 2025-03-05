@@ -8,7 +8,6 @@ from torch import Tensor
 from torch.nn import functional as F
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 
-from core.project_config import DEVICE, CACHE_DIR
 from core.tokenization_utils import custom_decoding, custom_batch_encoding
 
 
@@ -34,8 +33,8 @@ def single_generate_from_tokens(
     """
 
     # Prepare input ids
-    input_ids = torch.tensor([input_ids], device=DEVICE)
-    attention_mask = torch.ones_like(input_ids, device=DEVICE)
+    input_ids = torch.tensor([input_ids], device=model.device)
+    attention_mask = torch.ones_like(input_ids, device=model.device)
 
     # Set sampling parameters
     if temperature is not None:
@@ -99,8 +98,8 @@ def batch_generate_from_tokens(
     padded_input_ids_BL, padded_attention_mask_BL = custom_pad(input_ids_BL, tokenizer)
 
     # Convert to tensors
-    input_ids_tensor = torch.tensor(padded_input_ids_BL).to(DEVICE)
-    attention_mask_tensor = torch.tensor(padded_attention_mask_BL).to(DEVICE)
+    input_ids_tensor = torch.tensor(padded_input_ids_BL).to(model.device)
+    attention_mask_tensor = torch.tensor(padded_attention_mask_BL).to(model.device)
 
     # Set sampling parameters
     if temperature is not None:
@@ -220,7 +219,7 @@ def batch_generate(
             )
             generated_texts.extend(batch_generations)
     else:
-        with torch.inference_mode(), torch.autocast(device_type=DEVICE):
+        with torch.inference_mode(), torch.autocast(device_type=model.device):
             for _ in range(num_samples_per_topic):
                 batch_generations = batch_generate_from_tokens(
                     model=model,
@@ -234,7 +233,9 @@ def batch_generate(
                 generated_texts.extend(batch_generations)
 
     if verbose:
-        print(f"full generation:\n{generated_texts}\n\n")
+        input_tokens = custom_decoding(model_name, tokenizer, input_ids, skip_special_tokens)
+        for i, o in zip(input_tokens, generated_texts):
+            print(f"input: {i}\noutput: {o}\n\n")
     return generated_texts
 
 
@@ -258,7 +259,7 @@ def compute_embeddings(
     """Embed a batch of words."""
     batch_formatted = [f"{prefix}{word.lower()}" for word in words]
     batch_dict = tokenizer_emb(batch_formatted, padding=True, truncation=False, return_tensors="pt")
-    batch_dict = batch_dict.to(DEVICE)
+    batch_dict = batch_dict.to(model_emb.device)
 
     # outputs.last_hidden_state.shape (batch_size, sequence_length, hidden_size) hidden activations of the last layer
     outputs = model_emb(**batch_dict)

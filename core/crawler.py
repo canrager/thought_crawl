@@ -17,7 +17,6 @@ from spacy.language import Language
 import psutil
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 
-from core.project_config import DEVICE
 from core.generation_utils import batch_generate, compute_embeddings, batch_compute_openai_embeddings
 from core.topic_queue import TopicQueue, Topic
 from core.crawler_config import CrawlerConfig
@@ -183,7 +182,7 @@ class Crawler:
             chinese_raw_B = [t.raw for t in chinese_topic_B]
             zh_en_ids_B = tokenizer_zh_en(
                 chinese_raw_B, padding=True, truncation=True, return_tensors="pt"
-            ).to(DEVICE)
+            ).to(model_zh_en.device)
             with torch.inference_mode():
                 translated_ids_B = model_zh_en.generate(**zh_en_ids_B)
             translated_str_B = tokenizer_zh_en.batch_decode(
@@ -518,7 +517,7 @@ class Crawler:
 
     def initialize_head_embeddings(self, model_emb: AutoModel, tokenizer_emb: AutoTokenizer, use_openai_embeddings: bool = False):
         self.head_embedding_CD = torch.zeros(
-            0, model_emb.config.hidden_size, device=DEVICE
+            0, model_emb.config.hidden_size, device=model_emb.device
         )  # [num_head_topics, hidden_size]
         for batch_start in range(
             0, self.queue.num_head_topics, self.config.load_embedding_batch_size

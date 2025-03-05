@@ -12,7 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
-from core.project_config import INPUT_DIR, INTERIM_DIR, RESULT_DIR, DEVICE, CACHE_DIR
+from core.project_config import INPUT_DIR, INTERIM_DIR, RESULT_DIR
 from core.model_utils import load_filter_models
 from core.generation_utils import batch_compute_embeddings
 
@@ -45,6 +45,9 @@ print(f'len gt topics: {len(gt_topics)}')
 # %%
 # compute semantic embeddings for gt and ranked topics
     # Text embedding for measuring semantic similarity
+CACHE_DIR = "/share/u/models/"
+DEVICE = "cuda:0"
+
 tokenizer_emb = AutoTokenizer.from_pretrained(
     "intfloat/multilingual-e5-large-instruct", cache_dir=CACHE_DIR
 )

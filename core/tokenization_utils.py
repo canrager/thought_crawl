@@ -91,8 +91,8 @@ def custom_encoding_r1(
         thinking_tokens = tokenizer.encode(thinking_message, add_special_tokens=False)
         token_ids = token_ids + [st["THINK_START"]] + [st["NEWLINE"]] + thinking_tokens
 
-    if assistant_prefill == "" and thinking_message == "":
-        token_ids = token_ids + [st["THINK_START"]] + [st["NEWLINE"]]
+    # if assistant_prefill == "" and thinking_message == "":
+    #     token_ids = token_ids + [st["THINK_START"]] + [st["NEWLINE"]]
     
     if force_thought_skip:  
         token_ids = token_ids + [st["NEWLINE"]] + [st["THINK_END"]]
@@ -193,7 +193,9 @@ def custom_decoding(
     Custom decoding for the model.
     """
     st = get_special_tokens(model_name)
-    token_ids = [[id for id in batch if id != st["EOS"]] for batch in token_ids_BL.tolist()] # Remove padding and EOS tokens
+    if isinstance(token_ids_BL, torch.Tensor):
+        token_ids_BL = token_ids_BL.tolist()
+    token_ids = [[id for id in batch if id != st["EOS"]] for batch in token_ids_BL] # Remove padding and EOS tokens
     generated_texts = tokenizer.batch_decode(
         token_ids,
         skip_special_tokens=skip_special_tokens,

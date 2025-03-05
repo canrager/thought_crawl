@@ -1,12 +1,14 @@
 import pytest
 from core.generation_utils import batch_generate
 from core.model_utils import load_model
-from core.project_config import DEVICE, CACHE_DIR
 from nnsight import LanguageModel
 
 TOPICS = ["capital of France", "main city of Germany", "most populous city in Italy"]
 USER_MESSAGE_TEMPLATE = "What is the {}?"
 THINKING_MESSAGE = "I know that."
+
+DEVICE = "cuda:0"
+CACHE_DIR = "/share/u/models/"
 
 @pytest.fixture
 def local_model_and_tokenizer():

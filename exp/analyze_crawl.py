@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModel
 
 from core.generation_utils import batch_compute_embeddings
-from core.project_config import INPUT_DIR, INTERIM_DIR, RESULT_DIR, CACHE_DIR, DEVICE
+from core.project_config import INPUT_DIR, INTERIM_DIR, RESULT_DIR
 from core.crawler import CrawlerStats
 
 
