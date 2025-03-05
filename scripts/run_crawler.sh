@@ -17,11 +17,8 @@ mkdir -p "$PROJECT_ROOT/artifacts/log"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="$PROJECT_ROOT/artifacts/log/crawler_debug_${TIMESTAMP}.log"
 
-echo "Starting thought crawler in debug mode..."
-echo "Logs will be written to: $LOG_FILE"
+echo "Log Dir: $LOG_FILE"
 
-# Prerequisite: install spacy model
-python -m spacy download en_core_web_sm
 # Run the crawler script with nohup and write to the log file
 nohup python exp/run_crawler.py \
     --device "cuda:0" \
@@ -31,11 +28,7 @@ nohup python exp/run_crawler.py \
 
 # Store the process ID
 PID=$!
-echo "Process started with PID: $PID"
-echo "To check status: tail -f $LOG_FILE"
-echo "To terminate: kill $PID"
+echo "PID: $PID"
 
 # Add any additional arguments as needed
 # Example: --load_fname "path/to/saved/state" if you want to resume from a saved state
-
-echo "Thought crawler debug run started in background" 

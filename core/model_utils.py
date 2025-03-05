@@ -7,9 +7,10 @@ from transformers import (
 )
 import torch
 import os
-import spacy
+import spacy.util
 from openai import OpenAI
 from core.project_config import INPUT_DIR
+import sys
 
 
 def load_model(model_name: str, cache_dir: str, device: str, quantization_bits: int = None):
@@ -132,7 +133,16 @@ def load_filter_models(cache_dir: str, device: str):
 
     # NLP model for formatting / subject extraction
     # needs python -m spacy download en_core_web_sm
-    model_spacy_en = spacy.load("en_core_web_sm")
+    try:
+        # Check if the model is already downloaded
+        if not spacy.util.is_package("en_core_web_sm"):
+            print("Downloading spaCy model 'en_core_web_sm'...")
+            import subprocess
+            subprocess.check_call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
+        model_spacy_en = spacy.load("en_core_web_sm")
+    except Exception as e:
+        print(f"Warning: Could not load or download spaCy model: {e}")
+        model_spacy_en = None
 
     return {
         "tokenizer_zh_en": tokenizer_zh_en,

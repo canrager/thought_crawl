@@ -312,7 +312,7 @@ class Crawler:
         if (
             self.head_embedding_CD is None
         ):  # Initializing it here so we don't have to pass in model_emb and device to the __init__ method
-            self.initialize_head_embeddings(model_emb, tokenizer_emb, use_openai_embeddings=False)
+            self.initialize_head_embeddings(model_emb, tokenizer_emb)
         if formatted_topics == []:
             return formatted_topics
 
@@ -345,7 +345,7 @@ class Crawler:
     def deduplicate_oai(
         self,
         openai_client,
-        openai_emb_model: str,
+        openai_emb_model_name,
         formatted_topics: List[Topic],
         verbose: bool = False,
     ) -> List[Topic]:
@@ -363,7 +363,10 @@ class Crawler:
             List[Topic]: The input topics with is_head, cluster_idx, and cossim_to_head fields updated
         """
         if self.head_embedding_CD is None:
-            self.initialize_head_embeddings(openai_client, openai_emb_model, use_openai_embeddings=True)
+            self.initialize_head_embeddings_oai(
+                openai_client=openai_client,
+                openai_emb_model_name=openai_emb_model_name,
+            )
         
         if formatted_topics == []:
             return formatted_topics
@@ -371,7 +374,7 @@ class Crawler:
         formatted_text = [t.text for t in formatted_topics]
 
         # Compute embeddings using OpenAI API
-        batch_embeddings_BD = batch_compute_openai_embeddings(openai_client, openai_emb_model, formatted_text)
+        batch_embeddings_BD = batch_compute_openai_embeddings(openai_client, openai_emb_model_name, formatted_text)
 
         # Update topic
         for topic, embedding_D in zip(formatted_topics, batch_embeddings_BD):
@@ -515,9 +518,11 @@ class Crawler:
                 )
         return topics
 
-    def initialize_head_embeddings(self, model_emb: AutoModel, tokenizer_emb: AutoTokenizer, use_openai_embeddings: bool = False):
+    def initialize_head_embeddings(self, model_emb: AutoModel, tokenizer_emb: AutoTokenizer):
+        hidden_size = model_emb.config.hidden_size
+        device = model_emb.device
         self.head_embedding_CD = torch.zeros(
-            0, model_emb.config.hidden_size, device=model_emb.device
+            0, hidden_size, device=device
         )  # [num_head_topics, hidden_size]
         for batch_start in range(
             0, self.queue.num_head_topics, self.config.load_embedding_batch_size
@@ -526,16 +531,30 @@ class Crawler:
                 batch_start + self.config.load_embedding_batch_size, self.queue.num_head_topics
             )
             batch_topics = self.queue.head_topics[batch_start:batch_end]
-            if use_openai_embeddings:
-                batch_embeddings = batch_compute_openai_embeddings(
-                    openai_client=self.config.openai_client,
-                    openai_emb_model=self.config.openai_emb_model,
-                    words=[t.text for t in batch_topics]
-                )
-            else:
-                batch_embeddings = compute_embeddings(
-                    tokenizer_emb, model_emb, [t.text for t in batch_topics]
-                )
+           
+            batch_embeddings = compute_embeddings(
+                tokenizer_emb, model_emb, [t.text for t in batch_topics]
+            )
+            self.head_embedding_CD = torch.cat((self.head_embedding_CD, batch_embeddings), dim=0)
+
+    def initialize_head_embeddings_oai(self, openai_client, openai_emb_model_name):
+        hidden_size = 1536 # TODO make this a variable that is automatically set
+        device = "cpu"
+        self.head_embedding_CD = torch.zeros(
+            0, hidden_size, device=device
+        )  # [num_head_topics, hidden_size]
+        for batch_start in range(
+            0, self.queue.num_head_topics, self.config.load_embedding_batch_size
+        ):
+            batch_end = min(
+                batch_start + self.config.load_embedding_batch_size, self.queue.num_head_topics
+            )
+            batch_topics = self.queue.head_topics[batch_start:batch_end]
+            batch_embeddings = batch_compute_openai_embeddings(
+                openai_client=openai_client,
+                openai_emb_model_name=openai_emb_model_name,
+                words=[t.text for t in batch_topics]
+            )
             self.head_embedding_CD = torch.cat((self.head_embedding_CD, batch_embeddings), dim=0)
 
     def crawl(
@@ -629,7 +648,7 @@ class Crawler:
                         if filter_models.get("has_openai", False):
                             new_topics = self.deduplicate_oai(
                                 openai_client=filter_models["openai_client"],
-                                openai_emb_model=filter_models["openai_emb_model"],
+                                openai_emb_model_name=filter_models["openai_emb_model_name"],
                                 formatted_topics=new_topics,
                                 verbose=verbose,
                             )

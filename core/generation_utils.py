@@ -219,7 +219,7 @@ def batch_generate(
             )
             generated_texts.extend(batch_generations)
     else:
-        with torch.inference_mode(), torch.autocast(device_type=model.device):
+        with torch.inference_mode(), torch.autocast(device_type=model.device.type):
             for _ in range(num_samples_per_topic):
                 batch_generations = batch_generate_from_tokens(
                     model=model,
@@ -317,7 +317,7 @@ def compute_openai_embeddings(
 
 def batch_compute_openai_embeddings(
     openai_client,
-    model_name: str,
+    openai_emb_model_name: str,
     words: List[str],
     batch_size: int = 100,
     prefix: str = "query: ",
@@ -327,7 +327,7 @@ def batch_compute_openai_embeddings(
     for i in trange(0, len(words), batch_size):
         batch_words = words[i : i + batch_size]
         batch_embeddings_BD.append(
-            compute_openai_embeddings(openai_client, model_name, batch_words, prefix=prefix)
+            compute_openai_embeddings(openai_client, openai_emb_model_name, batch_words, prefix=prefix)
         )
     batch_embeddings_BD = torch.cat(batch_embeddings_BD, dim=0)
     return batch_embeddings_BD
