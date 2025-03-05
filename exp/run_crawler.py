@@ -7,15 +7,6 @@ from core.model_utils import load_model, load_filter_models, load_from_path
 from core.project_config import INTERIM_DIR, RESULT_DIR
 import argparse
 
-# have this called with a script
-"""
-args are
-device: str, default = "cuda:0"
-cache_dir: str, default = "share/u/models/"
-load_fname: str, default = None
-debug: bool, default = False
-"""
-
 DEFAULT_CONFIG = {
     "model": {
         "model_path": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
@@ -93,7 +84,9 @@ if __name__ == "__main__":
     print(f'Saving to: {crawler_log_filename}\n\n')
 
     # Create Crawler or load from checkpoint
-    if args.load_fname is not None:
+    if args.load_fname is None:
+        crawler = Crawler(crawler_config=exp_config["crawler"], save_filename=crawler_log_filename)
+    else:
         load_dir = os.path.join(INTERIM_DIR, args.load_fname)
         crawler = Crawler.load(
             load_from_filename=load_dir,
@@ -101,8 +94,6 @@ if __name__ == "__main__":
         )
         crawler.config = exp_config["crawler"]  # adapt the config to the new parameters
         crawler.config.initial_topics = []  # no initial topics, we do not need to seed as we're not starting from scratch
-    else:
-        crawler = Crawler(crawler_config=exp_config["crawler"], save_filename=crawler_log_filename)
 
     # Go crawling!
     crawler.crawl(
