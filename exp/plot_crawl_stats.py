@@ -18,11 +18,13 @@ def load_crawl(crawl_fname: str) -> List[str]:
     return crawl_data
 
 
-crawl_fname = "crawler_log_20250216_202259_DeepSeek-R1-Distill-Llama-8B_1samples_100000crawls_Truefilter.json"
+crawl_fname = "crawler_log_20250220_174513_DeepSeek-R1-Distill-Llama-70B_1samples_100000crawls_Truefilter.json" # 0220 A6000
+# crawl_fname = "crawler_log_20250221_183354_DeepSeek-R1-Distill-Llama-70B_1samples_100000crawls_Truefilter.json" # 0221 A100
 crawl_data = load_crawl(crawl_fname)
 
 crawl_stats = CrawlerStats.load(crawl_data["stats"])
 # print(crawl_stats)
 # %%
-crawl_stats.visualize_cumulative_topic_count(save_path=os.path.join(RESULT_DIR, "cumulative_topic_count.png"))
+run_name = crawl_fname.split(".json")[0]
+crawl_stats.visualize_cumulative_topic_count(save_path=os.path.join(RESULT_DIR, f"cumulative_topic_count_{run_name}.png"))
 # %%

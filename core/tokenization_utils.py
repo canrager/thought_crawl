@@ -49,7 +49,7 @@ def get_special_tokens(model_name: str) -> Dict[str, int]:
     return st
 
 
-def custom_encoding(
+def custom_encoding_r1(
     model_name: str,
     tokenizer: AutoTokenizer,
     user_message: str,
@@ -113,22 +113,75 @@ def custom_batch_encoding(
     """
     Custom batch encoding for the model.
     """
-
-    token_ids = [
-        custom_encoding(
-            model_name=model_name,
+    if "deepseek" in model_name:
+        token_ids = [
+            custom_encoding_r1(
+                model_name=model_name,
+                tokenizer=tokenizer,
+                user_message=user_message,
+                thinking_message=thinking_message,
+                user_suffix=user_suffix,
+                assistant_prefill=assistant_prefill,
+                force_thought_skip=force_thought_skip,
+                template=template,
+            )
+            for user_message in user_messages
+        ]
+        return token_ids
+    elif "meta" in model_name:
+        token_ids = custom_batch_encoding_Meta(
             tokenizer=tokenizer,
-            user_message=user_message,
+            user_messages=user_messages,
             thinking_message=thinking_message,
             user_suffix=user_suffix,
             assistant_prefill=assistant_prefill,
             force_thought_skip=force_thought_skip,
             template=template,
         )
-        for user_message in user_messages
-    ]
-    return token_ids
+        return token_ids
+    else:
+        raise ValueError(f"Unsupported model: {model_name}. Only DeepSeek and Meta models are supported.")
 
+def custom_batch_encoding_Meta(
+    tokenizer: AutoTokenizer,
+    user_messages: List[str],
+    thinking_message: str = "",
+    user_suffix: str = "",
+    assistant_prefill: str = "",
+    force_thought_skip: bool = False,
+    template: str = "chat",
+) -> List[int]:
+    """
+    Custom batch encoding for the model.
+    """
+    if template != "chat":
+        raise ValueError(f"Unsupported template: {template}. Only 'chat' template is supported for Meta Llama.")
+    if thinking_message != "":
+        raise ValueError("Thinking message is not supported for Meta Llama.")
+    if force_thought_skip:
+        raise ValueError("Forced thought skip is not supported for Meta Llama.")
+    
+    token_ids = []
+    for user_message in user_messages:
+        user_message += " " + user_suffix
+        if assistant_prefill != "":
+            chat_ids = tokenizer.apply_chat_template(
+                [
+                    {"role": "user", "content": user_message},
+                    {"role": "assistant", "content": assistant_prefill},
+                ],
+                tokenize=True,
+                add_generation_prompt=False,
+            )[:-1] # Remove assistant EOS token so the assistant keeps generating
+        else:
+            # Standard template
+            chat_ids = tokenizer.apply_chat_template(
+                [{"role": "user", "content": user_message}],
+                tokenize=True,
+                add_generation_prompt=True,
+            )
+        token_ids.append(chat_ids)
+    return token_ids
 
 def custom_decoding(
     model_name: str,
@@ -140,7 +193,7 @@ def custom_decoding(
     Custom decoding for the model.
     """
     st = get_special_tokens(model_name)
-    token_ids = [[id for id in batch if id != st["EOS"]] for batch in token_ids_BL.tolist()]
+    token_ids = [[id for id in batch if id != st["EOS"]] for batch in token_ids_BL.tolist()] # Remove padding and EOS tokens
     generated_texts = tokenizer.batch_decode(
         token_ids,
         skip_special_tokens=skip_special_tokens,
@@ -161,17 +214,17 @@ if __name__ == "__main__":
 
     print("\n=== Basic Encoding Tests ===")
 
-    base_token_ids = custom_encoding(model_name, tokenizer, user_message, template="base")
+    base_token_ids = custom_encoding_r1(model_name, tokenizer, user_message, template="base")
     base_token_str = tokenizer.decode(base_token_ids)
     print(f"Base template:\n{base_token_str}\n")
 
-    chat_token_ids = custom_encoding(model_name, tokenizer, user_message, template="chat")
+    chat_token_ids = custom_encoding_r1(model_name, tokenizer, user_message, template="chat")
     chat_token_str = tokenizer.decode(chat_token_ids)
     print(f"Chat template:\n{chat_token_str}\n")
 
     # Test with thinking message
     print("=== With Thinking Message ===")
-    chat_thinking_ids = custom_encoding(
+    chat_thinking_ids = custom_encoding_r1(
         model_name, tokenizer, user_message, thinking_message=thinking_message, template="chat"
     )
     chat_thinking_str = tokenizer.decode(chat_thinking_ids)
@@ -179,7 +232,7 @@ if __name__ == "__main__":
 
     # Test with user suffix
     print("=== With User Suffix ===")
-    chat_suffix_ids = custom_encoding(
+    chat_suffix_ids = custom_encoding_r1(
         model_name, tokenizer, user_message, user_suffix=user_suffix, template="chat"
     )
     chat_suffix_str = tokenizer.decode(chat_suffix_ids)
@@ -187,7 +240,7 @@ if __name__ == "__main__":
 
     # Test with assistant prefill
     print("=== With Assistant Prefill ===")
-    chat_prefill_ids = custom_encoding(
+    chat_prefill_ids = custom_encoding_r1(
         model_name, tokenizer, user_message, assistant_prefill=assistant_prefill, template="chat"
     )
     chat_prefill_str = tokenizer.decode(chat_prefill_ids)
@@ -204,7 +257,7 @@ if __name__ == "__main__":
 
     # Test combining multiple features
     print("\n=== Combined Features Test ===")
-    combined_ids = custom_encoding(
+    combined_ids = custom_encoding_r1(
         model_name,
         tokenizer,
         user_message,

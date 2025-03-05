@@ -1,7 +1,7 @@
 from pathlib import Path
 
 DEVICE = "cuda:0"
-CACHE_DIR = "/share/u/models"
+CACHE_DIR = "/share/u/models/"
 
 ROOT_DIR = Path(__file__).parent.parent
 INPUT_DIR = ROOT_DIR / "artifacts" / "input"

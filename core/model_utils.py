@@ -1,9 +1,18 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, AutoModelForSeq2SeqLM, AutoModel
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    BitsAndBytesConfig,
+    AutoModelForSeq2SeqLM,
+    AutoModel,
+)
 import torch
 import os
 import spacy
+from openai import OpenAI
+from core.project_config import INPUT_DIR
 
-def load_model(model_name: str, cache_dir: str, device: str):
+
+def load_model(model_name: str, cache_dir: str, device: str, quantization_bits: int = None):
     """
     Load a huggingface model and tokenizer.
 
@@ -11,35 +20,47 @@ def load_model(model_name: str, cache_dir: str, device: str):
         device (str): Device to load the model on ('auto', 'cuda', 'cpu', etc.)
         cache_dir (str, optional): Directory to cache the downloaded model
     """
+    local_path = os.path.join(cache_dir, f"models--{model_name.replace('/', '--')}")
+    local_path_exists = os.path.exists(local_path)
+    if local_path_exists:
+        print(f'Model exists in {local_path}')
+    else:
+        print(f'Model does not exist in {local_path}')
 
     # Determine quantization
     torch_dtype = torch.bfloat16
-    quantization_config = None
 
-    if "70B" in model_name or "32B" in model_name:
+    if quantization_bits == 8:
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        print("Using 8-bit quantization and bfloat16")
+    elif quantization_bits == 4:
         quantization_config = BitsAndBytesConfig(load_in_4bit=True)
-        print("Using 4-bit quantization")
+        print("Using 4-bit quantization and bfloat16")
+    else:
+        quantization_config = None
+        print("Using no quantization and bfloat16")
 
     # Load tokenizer and model
-    tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name, 
+        cache_dir=cache_dir
+    )
 
-    if "Llama-3.3-70B" in model_name:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch_dtype,
-            device_map=device,
-            quantization_config=quantization_config,
-            cache_dir=cache_dir,
-        )
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            # model_name,
-            pretrained_model_name_or_path=os.path.join(cache_dir, model_name),
-            torch_dtype=torch_dtype,
-            device_map=device,
-            quantization_config=quantization_config,
-            # cache_dir=cache_dir,
-        )
+    # # Standard way
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch_dtype,
+        device_map=device,
+        quantization_config=quantization_config,
+        cache_dir=cache_dir,
+    )
+    # Path specific way
+    # model = AutoModelForCausalLM.from_pretrained(
+    #     pretrained_model_name_or_path=os.path.join(cache_dir, model_name),
+    #     torch_dtype=torch_dtype,
+    #     device_map=device,
+    #     quantization_config=quantization_config,
+    # )
 
     # Optimize for inference
     model.eval()
@@ -47,18 +68,46 @@ def load_model(model_name: str, cache_dir: str, device: str):
 
     return model, tokenizer
 
-def load_filter_models(cache_dir: str, device: str):
+def load_openai_client(api_key_path=None):
+    """
+    Load OpenAI client with API key.
+    
+    Args:
+        api_key_path (str, optional): Path to file containing the OpenAI API key.
+            If None, will look for it in INPUT_DIR/oai.txt
+    
+    Returns:
+        OpenAI: OpenAI client
+        str: Name of the embedding model to use
+    """
+    if api_key_path is None:
+        api_key_path = os.path.join(INPUT_DIR, "oai.txt")
+    
+    with open(api_key_path, "r") as f:
+        api_key = f.read().strip()
+    
+    client = OpenAI(api_key=api_key)
+    emb_model_name = "text-embedding-3-small"
+    
+    return client, emb_model_name
+
+def load_zh_en_translation_model(cache_dir: str, device: str):
     # Translation LM
     tokenizer_zh_en = AutoTokenizer.from_pretrained(
-        "Helsinki-NLP/opus-mt-zh-en", cache_dir=cache_dir
+        "Helsinki-NLP/opus-mt-zh-en", 
+        cache_dir=cache_dir
     )
     model_zh_en = AutoModelForSeq2SeqLM.from_pretrained(
-        "Helsinki-NLP/opus-mt-zh-en", cache_dir=cache_dir, device_map=device
+        "Helsinki-NLP/opus-mt-zh-en", 
+        cache_dir=cache_dir, 
+        device_map=device
     )
+    return model_zh_en, tokenizer_zh_en
 
-    # Text embedding for measuring semantic similarity
+def load_embedding_model(cache_dir: str, device: str):
     tokenizer_emb = AutoTokenizer.from_pretrained(
-        "intfloat/multilingual-e5-large-instruct", cache_dir=cache_dir
+        "intfloat/multilingual-e5-large-instruct", 
+        cache_dir=cache_dir
     )
     model_emb = AutoModel.from_pretrained(
         "intfloat/multilingual-e5-large-instruct",
@@ -66,6 +115,20 @@ def load_filter_models(cache_dir: str, device: str):
         device_map=device,
         # torch_dtype=torch.bfloat16,
     )
+    return model_emb, tokenizer_emb
+
+def load_filter_models(cache_dir: str, device: str):
+    model_zh_en, tokenizer_zh_en = load_zh_en_translation_model(cache_dir, device)
+    model_emb, tokenizer_emb = load_embedding_model(cache_dir, device)
+    
+    # Load OpenAI client for embeddings
+    try:
+        openai_client, openai_emb_model_name = load_openai_client()
+        has_openai = True
+    except Exception as e:
+        print(f"Warning: Could not load OpenAI client: {e}")
+        openai_client, openai_emb_model_name = None, None
+        has_openai = False
 
     # NLP model for formatting / subject extraction
     # needs python -m spacy download en_core_web_sm
@@ -77,4 +140,18 @@ def load_filter_models(cache_dir: str, device: str):
         "tokenizer_emb": tokenizer_emb,
         "model_emb": model_emb,
         "model_spacy_en": model_spacy_en,
+        "openai_client": openai_client,
+        "openai_emb_model_name": openai_emb_model_name,
+        "has_openai": has_openai,
     }
+
+def load_from_path(path: str, device: str):
+    model = AutoModelForCausalLM.from_pretrained(
+        pretrained_model_name_or_path=path,
+        device_map=device,
+        torch_dtype=torch.bfloat16,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        pretrained_model_name_or_path=path,
+    )
+    return model, tokenizer

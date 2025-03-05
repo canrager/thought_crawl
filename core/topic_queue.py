@@ -10,22 +10,31 @@ from core.generation_utils import compute_embeddings
 
 @dataclass
 class Topic:
-    text: str
+    text: str = None
     raw: str = None
     translation: str = None
+    id: int = None
+    parent_id: int = None
+    is_chinese: bool = None
     is_head: bool = None
     is_refusal: bool = None
     cossim_to_head: float = None
     cluster_idx: int = None
+    responses: List[str] = None
 
     def to_dict(self):
         return {
+            "id": self.id,
             "text": self.text,
             "raw": self.raw,
             "translation": self.translation,
             "is_head": self.is_head,
+            "is_refusal": self.is_refusal,
+            "is_chinese": self.is_chinese,
             "cossim_to_head": self.cossim_to_head,
             "cluster_idx": self.cluster_idx,
+            "parent_id": self.parent_id,
+            "responses": self.responses,
         }
 
 
@@ -72,6 +81,7 @@ class TopicQueue:
             return []
 
         for topic in topics:
+            topic.id = self.num_total_topics
             if topic.is_head:
                 self.add_new_cluster_head(topic)
             else:
