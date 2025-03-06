@@ -421,7 +421,7 @@ class Crawler:
 
         # Preparation
         refusals = torch.zeros(len(head_topics_raw))
-        responses = [[]]*len(head_topics_raw)
+        responses = [[] for _ in range(len(head_topics_raw))]
         flattened_templates = []
         for language, templates in user_message_templates.items():
             flattened_templates.extend(templates)
@@ -442,21 +442,21 @@ class Crawler:
                 responses[head_topic_idx].append(gen)
                 is_refusal = self.is_refusal(gen)
                 is_refusal_B.append(is_refusal)
+                refusals[head_topic_idx] += float(is_refusal)
                 if verbose:
                     print(f"\n\n")
                     print(f"refusal: {bool(is_refusal)}")
                     print(gen)
-
-            is_refusal_B = torch.tensor(is_refusal, dtype=float)
-            refusals += is_refusal_B
                     
         majority_refusal_count = 0.5 * len(user_message_templates)
-        refusals = iter(refusals)
-        responses = iter(responses)
+
+        # Assign refusals and responses to topics, using indices since refusals are only generated for a subset of topics, and indices are not aligned.
+        refusal_idx = 0
         for topic in selected_topics:
             if topic.is_head:
-                topic.is_refusal = bool(next(refusals) >= majority_refusal_count)
-                topic.responses = next(responses)
+                topic.is_refusal = bool(refusals[refusal_idx] >= majority_refusal_count)
+                topic.responses = responses[refusal_idx]
+                refusal_idx += 1
         return selected_topics
 
     def batch_check_refusal(

@@ -4,32 +4,29 @@ from typing import List, Dict
 
 
 SPECIAL_TOKEN_MAP = {
-    "meta-llama": {
-        "BOS": 128000,
-        "USER": 128011,
-        "ASSISTANT": 128012,
-        "NEWLINE": 198,
-        "THINK_START": 128013,
-        "THINK_END": 128014,
-        "EOS": 128001,
+    "llama" : {
+        "names" : ["meta-llama", "allenai", "DeepSeek-R1-Distill-Llama", "perplexity-ai"],
+        "token_map" : {
+            "BOS": 128000,
+            "USER": 128011,
+            "ASSISTANT": 128012,
+            "NEWLINE": 198,
+            "THINK_START": 128013,
+            "THINK_END": 128014,
+            "EOS": 128001,
+        }
     },
-    "DeepSeek-R1-Distill-Llama": {
-        "BOS": 128000,
-        "USER": 128011,
-        "ASSISTANT": 128012,
-        "NEWLINE": 198,
-        "THINK_START": 128013,
-        "THINK_END": 128014,
-        "EOS": 128001,
-    },
-    "Qwen": {
-        "BOS": 151646,
-        "USER": 151644,
-        "ASSISTANT": 151645,
-        "NEWLINE": 198,
-        "THINK_START": 151648,
-        "THINK_END": 151649,
-        "EOS": 151643,
+    "qwen": {
+        "names" : ["Qwen"],
+        "token_map" : {
+            "BOS": 151646,
+            "USER": 151644,
+            "ASSISTANT": 151645,
+            "NEWLINE": 198,
+            "THINK_START": 151648,
+            "THINK_END": 151649,
+            "EOS": 151643,
+        }
     },
 }
 
@@ -39,8 +36,9 @@ def get_special_tokens(model_name: str) -> Dict[str, int]:
     """
     st = None
     for model_type in SPECIAL_TOKEN_MAP.keys():
-        if model_type in model_name:
-            st = SPECIAL_TOKEN_MAP[model_type]
+        match = [name in model_name for name in SPECIAL_TOKEN_MAP[model_type]["names"]]
+        if any(match):
+            st = SPECIAL_TOKEN_MAP[model_type]["token_map"]
             break
     if st is None:
         raise ValueError(

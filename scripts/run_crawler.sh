@@ -23,6 +23,8 @@ echo "Log Dir: $LOG_FILE"
 nohup python exp/run_crawler.py \
     --device "cuda:0" \
     --cache_dir "/share/u/models/" \
+    --model_path "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" \
+    --quantization_bits 8 \
     --debug "$@" \
     > "$LOG_FILE" 2>&1 &
 

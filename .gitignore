@@ -6,4 +6,5 @@
 artifacts
 logs
 exp/prototypes
+*_run_crawler.sh
 

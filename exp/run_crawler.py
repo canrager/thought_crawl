@@ -8,15 +8,11 @@ from core.project_config import INTERIM_DIR, RESULT_DIR
 import argparse
 
 DEFAULT_CONFIG = {
-    "model": {
-        "model_path": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
-        "quantization_bits": 8
-    },
     "crawler": CrawlerConfig(
             temperature=0.6,
             num_samples_per_topic=1,
             num_crawl_steps=100_000,
-            generation_batch_size=10,
+            generation_batch_size=2,
             max_topic_string_length=200,
             max_generated_tokens=100,
             max_extracted_topics_per_generation=10,
@@ -32,14 +28,10 @@ DEFAULT_CONFIG = {
 }
 
 DEBUG_CONFIG = {
-    "model": {
-        "model_path": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-        "quantization_bits": 8,
-    },
     "crawler": CrawlerConfig(
             temperature=0.6,
             num_samples_per_topic=1,
-            num_crawl_steps=5,
+            num_crawl_steps=2,
             generation_batch_size=10,
             max_topic_string_length=200,
             max_generated_tokens=200,
@@ -64,6 +56,10 @@ if __name__ == "__main__":
     parser.add_argument("--cache_dir", type=str, default="/share/u/models/")
     parser.add_argument("--load_fname", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--model_path", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", 
+                        help="Path to the model to use for crawling")
+    parser.add_argument("--quantization_bits", type=int, default=8, choices=[0, 4, 8], 
+                        help="Quantization bits for model loading (0 for no quantization, 4 or 8 for quantization)")
     args = parser.parse_args()
 
     if args.debug:
@@ -73,12 +69,14 @@ if __name__ == "__main__":
 
     # Initialize models 
     model_crawl, tokenizer_crawl = load_model(
-        exp_config["model"]["model_path"], device=args.device, cache_dir=args.cache_dir, quantization_bits=exp_config["model"]["quantization_bits"],
+        args.model_path, device=args.device, cache_dir=args.cache_dir, quantization_bits=args.quantization_bits,
     )
     filter_models = load_filter_models(args.cache_dir, args.device)
 
     # Get crawler name
-    run_name = get_run_name(exp_config["model"]["model_path"], exp_config["crawler"])
+    run_name = get_run_name(args.model_path, exp_config["crawler"])
+    # Add quantization info to run name
+    run_name = f"{run_name}_q{args.quantization_bits}"
     crawler_log_filename = os.path.join(INTERIM_DIR, f"{run_name}.json")
     print(f'Run name: {run_name}')
     print(f'Saving to: {crawler_log_filename}\n\n')
