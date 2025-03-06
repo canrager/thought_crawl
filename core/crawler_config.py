@@ -133,6 +133,9 @@ REGEX_FILTER_START_END_ONLY = ["and", "or", "of", "to", "in", "on", "at"]
 
 @dataclass
 class CrawlerConfig:
+    # Device
+    device: str = "cuda:0"
+
     # Feature flags
     do_filter_refusals: bool = True
     do_force_thought_skip: bool = True

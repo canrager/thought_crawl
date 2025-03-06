@@ -137,7 +137,7 @@ class Crawler:
         self.config = crawler_config
         self.queue = TopicQueue()
         self.head_embedding_CD: Tensor = None  # will be initialized in initialize_head_embeddings
-        # NOTE Model, Tokenizer, Device are not saved to the Object to reduce overhead
+        # NOTE Model, Tokenizer, are not saved to the Object to reduce overhead
 
         self.stats = CrawlerStats()
 
@@ -378,6 +378,7 @@ class Crawler:
 
         # Update topic
         for topic, embedding_D in zip(formatted_topics, batch_embeddings_BD):
+            embedding_D = embedding_D.to(self.config.device)
             cossim_C = embedding_D @ self.head_embedding_CD.T
             max_cossim, cluster_idx = torch.max(cossim_C, dim=-1)
             is_head = max_cossim < self.config.cossim_thresh
@@ -539,9 +540,8 @@ class Crawler:
 
     def initialize_head_embeddings_oai(self, openai_client, openai_emb_model_name):
         hidden_size = 1536 # TODO make this a variable that is automatically set
-        device = "cpu"
         self.head_embedding_CD = torch.zeros(
-            0, hidden_size, device=device
+            0, hidden_size, device=self.config.device
         )  # [num_head_topics, hidden_size]
         for batch_start in range(
             0, self.queue.num_head_topics, self.config.load_embedding_batch_size
@@ -555,6 +555,7 @@ class Crawler:
                 openai_emb_model_name=openai_emb_model_name,
                 words=[t.text for t in batch_topics]
             )
+            batch_embeddings = batch_embeddings.to(self.config.device)
             self.head_embedding_CD = torch.cat((self.head_embedding_CD, batch_embeddings), dim=0)
 
     def crawl(

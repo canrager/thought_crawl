@@ -16,10 +16,12 @@ titles = {
     "deepseek-70b-noinit-q8": "crawler_log_20250224_035707_DeepSeek-R1-Distill-Llama-70B_1samples_100000crawls_Truefilter.json",
     "deepseek-70b-noinit-q4": "crawler_log_20250224_042226_DeepSeek-R1-Distill-Llama-70B_1samples_100000crawls_Truefilter.json",
     "meta-70b-noinit-q4": "crawler_log_20250224_100608_Llama-3.3-70B-Instruct_1samples_100000crawls_Truefilter.json",
-    "meta-70b-noinit-q8": "crawler_log_20250224_101010_Llama-3.3-70B-Instruct_1samples_100000crawls_Truefilter.json"
+    "meta-70b-noinit-q8": "crawler_log_20250224_101010_Llama-3.3-70B-Instruct_1samples_100000crawls_Truefilter.json",
+    "deepseek-70b-thoughtskip-init-q8": "crawler_log_20250305_170124_DeepSeek-R1-Distill-Llama-70B_1samples_100000crawls_Truefilter_q8.json",
+    "deepseek-8b-thoughtskip-init-q8": "crawler_log_20250305_170955_DeepSeek-R1-Distill-Llama-8B_1samples_100000crawls_Truefilter_q8.json",
 }
 
-run_title = "deepseek-70B-init-q8"
+run_title = "deepseek-70b-thoughtskip-init-q8"
 run_path = titles[run_title]
 run_name = run_path.split(".json")[0]
 

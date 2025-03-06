@@ -92,6 +92,8 @@ if __name__ == "__main__":
         )
         crawler.config = exp_config["crawler"]  # adapt the config to the new parameters
         crawler.config.initial_topics = []  # no initial topics, we do not need to seed as we're not starting from scratch
+    
+    crawler.config.device = args.device
 
     # Go crawling!
     crawler.crawl(
