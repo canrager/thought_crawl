@@ -13,14 +13,15 @@ DEFAULT_CONFIG = {
             num_samples_per_topic=1,
             num_crawl_steps=100_000,
             generation_batch_size=2,
-            max_topic_string_length=200,
+            max_topic_string_length=100,
             max_generated_tokens=100,
             max_extracted_topics_per_generation=10,
             max_crawl_topics=1_000_000,
             tokenization_template="chat",
             do_filter_refusals=True,
             do_force_thought_skip=False,
-            cossim_thresh=0.91,
+            prompt_languages=["english", "chinese"],
+            refusal_max_new_tokens=25,
         ),
     "misc": {
         "verbose": False,
@@ -40,7 +41,6 @@ DEBUG_CONFIG = {
             tokenization_template="chat",
             do_filter_refusals=True,
             do_force_thought_skip=False,
-            cossim_thresh=0.91,
             prompt_languages=["english"],
         ),
     "misc": {
@@ -52,29 +52,35 @@ DEBUG_CONFIG = {
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device", type=str, default="cuda:0")
-    parser.add_argument("--cache_dir", type=str, default="/share/u/models/")
+    parser.add_argument("--cuda_visible_devices", type=str)
+    parser.add_argument("--cache_dir", type=str, default=None)
     parser.add_argument("--load_fname", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--model_path", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", 
                         help="Path to the model to use for crawling")
     parser.add_argument("--quantization_bits", type=int, default=8, choices=[0, 4, 8], 
                         help="Quantization bits for model loading (0 for no quantization, 4 or 8 for quantization)")
+    parser.add_argument("--prompt_injection_location", type=str, choices=["user_all", "user_suffix", "assistant_prefix", "thought_prefix", "thought_suffix"],
+                        help="Where to inject the prompt in the conversation")
     args = parser.parse_args()
 
     if args.debug:
         exp_config = DEBUG_CONFIG
     else:
         exp_config = DEFAULT_CONFIG
+    
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
+    # Setting device for tensors and smaller models
+    exp_config["crawler"].device = "cuda:0"
 
     # Initialize models 
     model_crawl, tokenizer_crawl = load_model(
-        args.model_path, device=args.device, cache_dir=args.cache_dir, quantization_bits=args.quantization_bits,
+        args.model_path, device="auto", cache_dir=args.cache_dir, quantization_bits=args.quantization_bits,
     )
-    filter_models = load_filter_models(args.cache_dir, args.device)
+    filter_models = load_filter_models(args.cache_dir, "cuda")
 
     # Get crawler name
-    run_name = get_run_name(args.model_path, exp_config["crawler"])
+    run_name = get_run_name(args.model_path, exp_config["crawler"], args.prompt_injection_location)
     # Add quantization info to run name
     run_name = f"{run_name}_q{args.quantization_bits}"
     crawler_log_filename = os.path.join(INTERIM_DIR, f"{run_name}.json")
@@ -92,14 +98,13 @@ if __name__ == "__main__":
         )
         crawler.config = exp_config["crawler"]  # adapt the config to the new parameters
         crawler.config.initial_topics = []  # no initial topics, we do not need to seed as we're not starting from scratch
-    
-    crawler.config.device = args.device
 
     # Go crawling!
     crawler.crawl(
         model=model_crawl,
         tokenizer=tokenizer_crawl,
         filter_models=filter_models,
+        prompt_injection_location=args.prompt_injection_location,
         verbose=exp_config["misc"]["verbose"],
     )
 

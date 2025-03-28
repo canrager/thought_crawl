@@ -1,12 +1,13 @@
 from typing import List, Optional
 from tqdm import trange
-
+import time
 import nnsight
 from nnsight import LanguageModel
 import torch
 from torch import Tensor
 from torch.nn import functional as F
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
+import anthropic
 
 from core.tokenization_utils import custom_decoding, custom_batch_encoding
 
@@ -62,16 +63,41 @@ def single_generate_from_tokens(
 
 
 def custom_pad(input_ids, tokenizer):
-    if not hasattr(tokenizer, "pad_token_id") or tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-
+    # if not hasattr(tokenizer, "pad_token_id") or tokenizer.pad_token_id is None:
+    #     tokenizer.pad_token_id = tokenizer.eos_token_id
+    # always use eos_token_id as pad_token_id
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+    
     # Pad input_ids to the same length
+    print(f' input_ids: {input_ids}')
     max_length = max(len(ids) for ids in input_ids)
     padded_input_ids = [
         [tokenizer.pad_token_id] * (max_length - len(ids)) + ids for ids in input_ids
     ]
     padded_attention_mask = [[0] * (max_length - len(ids)) + [1] * len(ids) for ids in input_ids]
     return padded_input_ids, padded_attention_mask
+
+
+def batch_complete_R1(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    texts: List[str],
+    max_new_tokens: int = 150,
+    temperature: float = 0.6,
+):
+    """
+    Complete the generated text using the R1 model.
+    """
+    tokenized_texts = tokenizer(texts, padding=True, truncation=False, return_tensors="pt", padding_side="left")
+    tokenized_texts = tokenized_texts.to(model.device)
+    with torch.no_grad():
+        outputs = model.generate(
+            **tokenized_texts,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+    generated_texts = custom_decoding(model.config._name_or_path, tokenizer, outputs, skip_special_tokens=True)
+    return generated_texts
 
 
 def batch_generate_from_tokens(
@@ -104,10 +130,8 @@ def batch_generate_from_tokens(
     # Set sampling parameters
     if temperature is not None:
         do_sample = True
-        top_p = temperature
     else:
         do_sample = False
-        top_p = None
 
     with torch.no_grad():
         outputs = model.generate(
@@ -117,7 +141,6 @@ def batch_generate_from_tokens(
             max_new_tokens=max_new_tokens,
             do_sample=do_sample,
             temperature=temperature,
-            top_p=top_p,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
@@ -145,10 +168,8 @@ def generate_text_from_tokens_NDIF(
     # Set sampling parameters
     if temperature is not None:
         do_sample = True
-        top_p = temperature
     else:
         do_sample = False
-        top_p = None
 
     # Generate text
     with model.generate(
@@ -156,7 +177,6 @@ def generate_text_from_tokens_NDIF(
         max_new_tokens=max_new_tokens,
         do_sample=do_sample,
         temperature=temperature,
-        top_p=top_p,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
         remote=True,  # Run the model remotely on NDIF
@@ -178,6 +198,7 @@ def batch_generate(
     tokenizer,
     selected_topics: List[str],
     user_message_template: str = "{}",
+    user_suffix: str = "",
     assistant_prefill: str = "",
     thinking_message: str = "",
     force_thought_skip: bool = False,
@@ -195,11 +216,14 @@ def batch_generate(
     generated_texts = []
     model_name = model.config._name_or_path
 
+    print(f' selected_topics: {selected_topics}')
+
     user_messages = [user_message_template.format(topic) for topic in selected_topics]
     input_ids = custom_batch_encoding(
         model_name=model_name,
         tokenizer=tokenizer,
         user_messages=user_messages,
+        user_suffix=user_suffix,
         assistant_prefill=assistant_prefill,
         thinking_message=thinking_message,
         force_thought_skip=force_thought_skip,
@@ -362,3 +386,58 @@ if __name__ == "__main__":
         remote=True,
     )
     print(generated_texts)
+
+def query_anthropic(prompt: str, api_key: str, system_prompt: Optional[str] = None, verbose: bool = False, max_tokens: int = 1000, temperature: float = 0.6) -> str:
+    """Query Anthropic's Claude model with prompt caching enabled and retry logic"""
+    client = anthropic.Client(
+        api_key=api_key,
+        # Enable prompt caching beta feature
+        default_headers={"anthropic-beta": "prompt-caching-2024-07-31"}
+    )
+
+    message_args = {}
+    if system_prompt is not None:
+        message_args["system"] = [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"}
+            }
+        ]
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        if verbose:
+            print(f"\nAttempt {attempt + 1}/{max_retries}")
+            print("-"*40)
+        
+        try:
+            message = client.messages.create(
+                # model="claude-3-5-haiku-latest",
+                model="claude-3-7-sonnet-latest",
+                max_tokens=max_tokens,
+                temperature=temperature,
+                messages=[{"role": "user", "content": prompt}],
+                **message_args
+            )
+
+            response = message.content[0].text
+            if verbose:
+                print("RESPONSE:")
+                print("-"*40)
+                print(response)
+                print("-"*40)
+
+            time.sleep(1)
+            return response
+        except Exception as e:
+            print(f"Anthropic API error: {e}")
+            if attempt < max_retries - 1:  # Don't sleep on the last attempt
+                if verbose:
+                    print(f"Retrying in 600 seconds...")
+                time.sleep(600)
+            continue
+
+    if verbose:
+        print(f"\nFailed to get valid response after {max_retries} attempts")
+    return ""

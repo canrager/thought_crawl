@@ -59,7 +59,7 @@ def load_topics(crawl_fname: str) -> List[str]:
     return filtered_topics[: CONFIG["num_topics"]]
 
 
-def setup_experiment():
+def setup_experiment(crawl_fname: str):
     """Set up experiment by loading model and topics"""
     # Set random seeds
     random.seed(CONFIG["seed"])
@@ -70,9 +70,6 @@ def setup_experiment():
     model, tokenizer = load_model(CONFIG["model_name"], device=CONFIG["device"], cache_dir=CONFIG["cache_dir"])
 
     # Load topics
-    crawl_fname = (
-        "crawler_log_20250215_204348_DeepSeek-R1-Distill-Llama-8B_1samples_100000crawls_Truefilter.json"
-    )
     topics = load_topics(crawl_fname)
     print(f"Loaded {len(topics)} topics")
 
@@ -85,17 +82,17 @@ def run_single_experiment(topics: List[str], model, tokenizer, run_idx: int) -> 
 
     # Initialize ranking systems
     ranking_systems = {
-        "wincount": WinCountRanking(topics),
+        # "wincount": WinCountRanking(topics),
         "elo": EloRanking(
             topics, initial_rating=CONFIG["elo_initial_rating"], k_factor=CONFIG["elo_k_factor"]
         ),
-        "trueskill": TrueSkillRanking(
-            topics,
-            mu=CONFIG["trueskill_mu"],
-            sigma=CONFIG["trueskill_sigma"],
-            beta=CONFIG["trueskill_beta"],
-            tau=CONFIG["trueskill_tau"],
-        ),
+        # "trueskill": TrueSkillRanking(
+        #     topics,
+        #     mu=CONFIG["trueskill_mu"],
+        #     sigma=CONFIG["trueskill_sigma"],
+        #     beta=CONFIG["trueskill_beta"],
+        #     tau=CONFIG["trueskill_tau"],
+        # ),
     }
 
     # Initialize trackers for each ranking system
@@ -156,8 +153,13 @@ def main():
     print("Starting ranking experiments...")
     print("Configuration:", json.dumps(CONFIG, indent=2))
 
+    #
+
     # Setup
-    model, tokenizer, topics = setup_experiment()
+    crawl_fname = (
+        "crawler_log_20250215_204348_DeepSeek-R1-Distill-Llama-8B_1samples_100000crawls_Truefilter.json"
+    )
+    model, tokenizer, topics = setup_experiment(crawl_fname)
 
     random.seed(CONFIG["seed"])
     torch.manual_seed(CONFIG["seed"])

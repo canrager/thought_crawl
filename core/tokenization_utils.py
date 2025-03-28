@@ -1,11 +1,11 @@
 from transformers import AutoTokenizer
 import torch
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 SPECIAL_TOKEN_MAP = {
     "llama" : {
-        "names" : ["meta-llama", "allenai", "DeepSeek-R1-Distill-Llama", "perplexity-ai"],
+        "names" : ["llama", "tulu", "1776"],
         "token_map" : {
             "BOS": 128000,
             "USER": 128011,
@@ -17,7 +17,7 @@ SPECIAL_TOKEN_MAP = {
         }
     },
     "qwen": {
-        "names" : ["Qwen"],
+        "names" : ["qwen"],
         "token_map" : {
             "BOS": 151646,
             "USER": 151644,
@@ -30,13 +30,30 @@ SPECIAL_TOKEN_MAP = {
     },
 }
 
+CHAT_TEMPLATE_MAP = {
+    "r1-reasoning" : {
+        "names" : ["deepseek", "1776"],
+        "template" : "r1-reasoning",
+    },
+    "llama-instruct" : {
+        "names" : ["meta", "tulu", "-sft"], # TODO: change to "custom-sft"
+        "template" : "llama-instruct",
+    },
+}
+
+def match_chat_template(model_name: str, template_name: str) -> bool:
+    """
+    Match the chat template for the model.
+    """
+    return any(name in model_name.lower() for name in CHAT_TEMPLATE_MAP[template_name]["names"])
+
 def get_special_tokens(model_name: str) -> Dict[str, int]:
     """
     Get the special tokens for the model.
     """
     st = None
     for model_type in SPECIAL_TOKEN_MAP.keys():
-        match = [name in model_name for name in SPECIAL_TOKEN_MAP[model_type]["names"]]
+        match = [name in model_name.lower() for name in SPECIAL_TOKEN_MAP[model_type]["names"]]
         if any(match):
             st = SPECIAL_TOKEN_MAP[model_type]["token_map"]
             break
@@ -87,7 +104,7 @@ def custom_encoding_r1(
     # Optionally prefill thinking tokens
     if len(thinking_message) > 0:
         thinking_tokens = tokenizer.encode(thinking_message, add_special_tokens=False)
-        token_ids = token_ids + [st["THINK_START"]] + [st["NEWLINE"]] + thinking_tokens
+        token_ids = token_ids + [st["THINK_START"]] + thinking_tokens
 
     # if assistant_prefill == "" and thinking_message == "":
     #     token_ids = token_ids + [st["THINK_START"]] + [st["NEWLINE"]]
@@ -111,7 +128,7 @@ def custom_batch_encoding(
     """
     Custom batch encoding for the model.
     """
-    if "deepseek" in model_name:
+    if match_chat_template(model_name, "r1-reasoning"):
         token_ids = [
             custom_encoding_r1(
                 model_name=model_name,
@@ -126,7 +143,7 @@ def custom_batch_encoding(
             for user_message in user_messages
         ]
         return token_ids
-    elif "meta" in model_name:
+    elif match_chat_template(model_name, "llama-instruct"):
         token_ids = custom_batch_encoding_Meta(
             tokenizer=tokenizer,
             user_messages=user_messages,
@@ -138,7 +155,7 @@ def custom_batch_encoding(
         )
         return token_ids
     else:
-        raise ValueError(f"Unsupported model: {model_name}. Only DeepSeek and Meta models are supported.")
+        raise ValueError(f"Unsupported model: {model_name}.")
 
 def custom_batch_encoding_Meta(
     tokenizer: AutoTokenizer,
@@ -150,14 +167,14 @@ def custom_batch_encoding_Meta(
     template: str = "chat",
 ) -> List[int]:
     """
-    Custom batch encoding for the model.
+    Custom batch encoding for Meta Llama and other Llama-based models.
     """
     if template != "chat":
-        raise ValueError(f"Unsupported template: {template}. Only 'chat' template is supported for Meta Llama.")
+        raise ValueError(f"Unsupported template: {template}. Only 'chat' template is supported for Llama models.")
     if thinking_message != "":
-        raise ValueError("Thinking message is not supported for Meta Llama.")
+        raise ValueError("Thinking message is not supported for Llama models.")
     if force_thought_skip:
-        raise ValueError("Forced thought skip is not supported for Meta Llama.")
+        raise ValueError("Forced thought skip is not supported for Llama models.")
     
     token_ids = []
     for user_message in user_messages:
@@ -186,14 +203,18 @@ def custom_decoding(
     tokenizer: AutoTokenizer,
     token_ids_BL: torch.Tensor,
     skip_special_tokens: bool = False,
+    pad_token_id: Optional[int] = None,
 ) -> List[str]:
     """
     Custom decoding for the model.
     """
-    st = get_special_tokens(model_name)
+    if pad_token_id is None:
+        st = get_special_tokens(model_name)
+        pad_token_id = st["EOS"]
+    
     if isinstance(token_ids_BL, torch.Tensor):
         token_ids_BL = token_ids_BL.tolist()
-    token_ids = [[id for id in batch if id != st["EOS"]] for batch in token_ids_BL] # Remove padding and EOS tokens
+    token_ids = [[id for id in batch if id != pad_token_id] for batch in token_ids_BL] # Remove padding and EOS tokens
     generated_texts = tokenizer.batch_decode(
         token_ids,
         skip_special_tokens=skip_special_tokens,

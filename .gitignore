@@ -1,10 +1,10 @@
 # Environment
-*/__pycache__/
+__pycache__/
 *.lock
 
 # Directories
 artifacts
 logs
 exp/prototypes
-*_run_crawler.sh
+# *_run_crawler.sh
 

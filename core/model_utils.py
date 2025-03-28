@@ -9,11 +9,11 @@ import torch
 import os
 import spacy.util
 from openai import OpenAI
-from core.project_config import INPUT_DIR
+from core.project_config import INPUT_DIR, MODELS_DIR
 import sys
+from typing import Optional
 
-
-def load_model(model_name: str, cache_dir: str, device: str, quantization_bits: int = None):
+def load_model(model_name: str, cache_dir: str, device: str, quantization_bits: int = None, tokenizer_only: bool = False):
     """
     Load a huggingface model and tokenizer.
 
@@ -21,12 +21,23 @@ def load_model(model_name: str, cache_dir: str, device: str, quantization_bits: 
         device (str): Device to load the model on ('auto', 'cuda', 'cpu', etc.)
         cache_dir (str, optional): Directory to cache the downloaded model
     """
-    local_path = os.path.join(cache_dir, f"models--{model_name.replace('/', '--')}")
-    local_path_exists = os.path.exists(local_path)
-    if local_path_exists:
-        print(f'Model exists in {local_path}')
-    else:
-        print(f'Model does not exist in {local_path}')
+
+    # Load tokenizer and model
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name, 
+        cache_dir=cache_dir
+    )
+
+    if tokenizer_only:
+        return tokenizer
+    
+    if cache_dir is not None:
+        local_path = os.path.join(cache_dir, f"models--{model_name.replace('/', '--')}")
+        local_path_exists = os.path.exists(local_path)
+        if local_path_exists:
+            print(f'Model exists in {local_path}')
+        else:
+            print(f'Model does not exist in {local_path}')
 
     # Determine quantization
     torch_dtype = torch.bfloat16
@@ -41,17 +52,15 @@ def load_model(model_name: str, cache_dir: str, device: str, quantization_bits: 
         quantization_config = None
         print("Using no quantization and bfloat16")
 
-    # Load tokenizer and model
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name, 
-        cache_dir=cache_dir
-    )
-
+    if device == "cuda":
+        device_map = "auto"
+    else:
+        device_map = device
     # # Standard way
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch_dtype,
-        device_map=device,
+        device_map=device_map,
         quantization_config=quantization_config,
         cache_dir=cache_dir,
     )
@@ -67,6 +76,19 @@ def load_model(model_name: str, cache_dir: str, device: str, quantization_bits: 
     model.eval()
     model = torch.compile(model)
 
+    return model, tokenizer
+
+def load_from_path(path: str, device: str):
+    model = AutoModelForCausalLM.from_pretrained(
+        pretrained_model_name_or_path=path,
+        device_map=device,
+        torch_dtype=torch.bfloat16,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        pretrained_model_name_or_path=path,
+    )
+    model.eval()
+    model = torch.compile(model)
     return model, tokenizer
 
 def load_openai_client(api_key_path=None):
@@ -118,7 +140,12 @@ def load_embedding_model(cache_dir: str, device: str):
     )
     return model_emb, tokenizer_emb
 
-def load_filter_models(cache_dir: str, device: str):
+def load_filter_models(cache_dir: Optional[str] = None, device: str = "auto"):
+    if cache_dir is None:
+        cache_dir = MODELS_DIR
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
     model_zh_en, tokenizer_zh_en = load_zh_en_translation_model(cache_dir, device)
     model_emb, tokenizer_emb = load_embedding_model(cache_dir, device)
     
@@ -154,14 +181,3 @@ def load_filter_models(cache_dir: str, device: str):
         "openai_emb_model_name": openai_emb_model_name,
         "has_openai": has_openai,
     }
-
-def load_from_path(path: str, device: str):
-    model = AutoModelForCausalLM.from_pretrained(
-        pretrained_model_name_or_path=path,
-        device_map=device,
-        torch_dtype=torch.bfloat16,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(
-        pretrained_model_name_or_path=path,
-    )
-    return model, tokenizer

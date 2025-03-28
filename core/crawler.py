@@ -17,10 +17,10 @@ from spacy.language import Language
 import psutil
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 
-from core.generation_utils import batch_generate, compute_embeddings, batch_compute_openai_embeddings
+from core.generation_utils import batch_generate, compute_embeddings, batch_compute_openai_embeddings, batch_complete_R1
 from core.topic_queue import TopicQueue, Topic
 from core.crawler_config import CrawlerConfig
-
+from core.tokenization_utils import match_chat_template
 EPS = 1e-10
 nvmlInit()
 
@@ -400,7 +400,20 @@ class Crawler:
         return formatted_topics
 
     def is_refusal(self, text: str) -> bool:
-        return any(refusal.lower() in text.lower() for refusal in set(self.config.refusal_messages))
+        # Count the number of "1. " in the text
+        num_ones = text.count("1. ")
+        # if there is exactly one "1. ", remove the assistant prefix
+        if num_ones == 1:
+            assistant_answer = text.split("1. ")[-1] # Remove the assistant prefix
+        else:
+            # We cannot determine the assistant answer, so we just return the text
+            assistant_answer = text
+
+        # Check each pattern until we find a match
+        for pattern in self.config.refusal_messages:
+            if re.search(pattern, assistant_answer, re.IGNORECASE):
+                return True
+        return False
 
     def check_refusal(
         self,
@@ -448,14 +461,14 @@ class Crawler:
                     print(f"\n\n")
                     print(f"refusal: {bool(is_refusal)}")
                     print(gen)
-                    
-        majority_refusal_count = 0.5 * len(user_message_templates)
+                    print(f"\n\n")
+        is_refusal_count = self.config.is_refusal_threshold * len(flattened_templates)
 
         # Assign refusals and responses to topics, using indices since refusals are only generated for a subset of topics, and indices are not aligned.
         refusal_idx = 0
         for topic in selected_topics:
             if topic.is_head:
-                topic.is_refusal = bool(refusals[refusal_idx] >= majority_refusal_count)
+                topic.is_refusal = bool(refusals[refusal_idx] >= is_refusal_count)
                 topic.responses = responses[refusal_idx]
                 refusal_idx += 1
         return selected_topics
@@ -563,6 +576,7 @@ class Crawler:
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
         filter_models: Dict,
+        prompt_injection_location: str,
         verbose: bool = False,
     ) -> List[str]:
         """Crawl the topics."""
@@ -613,12 +627,36 @@ class Crawler:
 
                         print(f"\n## generating...")
                         # Choose the correct prefill based on the model
-                        if "deepseek" in model.config._name_or_path:
-                            prefills = {"thinking_message": thinking_message}
-                        elif "meta" in model.config._name_or_path:
-                            prefills = {"assistant_prefill": thinking_message}
+                        if prompt_injection_location == "user_all":
+                            batch_topics_raw = ["" for _ in batch_topics_raw]
+                            template = "{}"
+                            prefills = {
+                                "user_suffix": thinking_message,
+                                "assistant_prefill": "1. "
+                            }
+                            max_new_tokens = self.config.max_generated_tokens
+                        elif prompt_injection_location == "user_suffix":
+                            prefills = {
+                                "user_suffix": thinking_message,
+                                "assistant_prefill": "1. "
+                            }
+                            max_new_tokens = self.config.max_generated_tokens
+                        elif prompt_injection_location == "assistant_prefix":
+                            prefills = {"assistant_prefill": thinking_message + "\n1. "}
+                            max_new_tokens = self.config.max_generated_tokens
+                        elif prompt_injection_location == "thought_prefix":
+                            prefills = {"thinking_message": thinking_message + "\n1. "}
+                            max_new_tokens = self.config.max_generated_tokens
+                        elif prompt_injection_location == "thought_suffix":
+                            # Prefills will be done after generation
+                            prefills = {
+                                "user_suffix": "",
+                                "assistant_prefill": "",
+                                "thinking_message": "",
+                            }
+                            max_new_tokens = 2048 # Generate as long as wanted
                         else:
-                            raise ValueError(f"Unsupported model: {model.config._name_or_path}. Only DeepSeek and Meta models are supported.")
+                            raise ValueError(f"Invalid prompt injection location: {prompt_injection_location}")
 
                         generated_texts = batch_generate(
                             model,
@@ -626,7 +664,7 @@ class Crawler:
                             batch_topics_raw,
                             user_message_template=template,
                             force_thought_skip=False,
-                            max_new_tokens=self.config.max_generated_tokens,
+                            max_new_tokens=max_new_tokens,
                             temperature=self.config.temperature,
                             tokenization_template=self.config.tokenization_template,
                             num_samples_per_topic=self.config.num_samples_per_topic,
@@ -634,6 +672,26 @@ class Crawler:
                             **prefills,
                         )
 
+                        print(f"pre suffixing: {generated_texts}")
+
+                        # Post-generation prefilling
+                        if prompt_injection_location == "thought_suffix":
+                            prefilled_texts = []
+                            for gen in generated_texts:
+                                if "</think>" in gen:
+                                    gen = gen.split("</think>")[0] # Only keep the text until </think>
+                                    gen = gen + "</think>\n\n" + thinking_message + "\n1. " # Prefill the generated text
+                                    prefilled_texts.append(gen)
+                                else:
+                                    pass # dont use topics that lack a complete thinking process
+                            generated_texts = batch_complete_R1(
+                                model=model,
+                                tokenizer=tokenizer,
+                                texts=prefilled_texts,
+                                max_new_tokens=self.config.max_generated_tokens,
+                                temperature=self.config.temperature,
+                            )
+                            print(f"post suffixing: {generated_texts}")
                         print(f"\n## formatting...")
                         new_topics = self.extract_and_format(
                             model_zh_en=filter_models["model_zh_en"],
@@ -873,7 +931,7 @@ class Crawler:
     #         json.dump(topic_dict, f)
 
 
-def get_run_name(model_path: str, crawler_config: CrawlerConfig):
+def get_run_name(model_path: str, crawler_config: CrawlerConfig, prompt_injection_location: str):
     model_name = model_path.split("/")[-1]
     run_name = (
         "crawler_log"
@@ -882,5 +940,6 @@ def get_run_name(model_path: str, crawler_config: CrawlerConfig):
         f"_{crawler_config.num_samples_per_topic}samples"
         f"_{crawler_config.num_crawl_steps}crawls"
         f"_{crawler_config.do_filter_refusals}filter"
+        f"_{prompt_injection_location}prompt"
     )
     return run_name
