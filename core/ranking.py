@@ -2,11 +2,46 @@ import numpy as np
 from scipy.stats import norm
 from dataclasses import dataclass
 import random
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Any
 from tqdm import tqdm
-
+import json
+import os
+import torch
 from core.generation_utils import batch_generate
+from core.model_utils import load_model
+from core.project_config import RESULT_DIR
+from core.ranking_eval import RankingTracker
 
+# Default ranking configuration
+DEFAULT_RANKING_CONFIG = {
+    "num_runs": 1,
+    "num_comparisons": 10_000,
+    "batch_size": 100,
+    "use_balanced_pairs": True,
+    "elo_initial_rating": 1000,
+    "elo_k_factor": 32,
+    "trueskill_mu": 1000,
+    "trueskill_sigma": 333.333,
+    "trueskill_beta": 166.667,
+    "trueskill_tau": 1.0,
+    "seed": 42,
+    "ranking_methods": ["elo"] # ["wincount", "elo", "trueskill"]
+}
+
+DEBUG_RANKING_CONFIG = {
+    "num_runs": 1,
+    "num_comparisons": 1000,
+    "batch_size": 100,
+    "use_balanced_pairs": True,
+    "elo_initial_rating": 1000,
+    "elo_k_factor": 32,
+    "trueskill_mu": 1000,
+    "trueskill_sigma": 333.333,
+    "trueskill_beta": 166.667,
+    "trueskill_tau": 1.0,
+    "seed": 42,
+    "ranking_methods": ["elo"] # ["wincount", "elo", "trueskill"]
+}
 
 @dataclass
 class TrueSkillRating:
@@ -179,11 +214,13 @@ def run_parallel_ranking_experiment(
                 return topic2
         return None
 
+    if len(topics) == 0:
+        raise ValueError("No topics provided")
+
     # Generate comparison pairs only once
     if use_balanced_pairs:
 
         # Shuffle the topics first
-
         all_pairs = []
         num_batches = int(num_comparisons/(len(topics)//2))
         for _ in range(num_batches):
@@ -212,6 +249,7 @@ def run_parallel_ranking_experiment(
             max_new_tokens=50,
             temperature=None,  # Greedy decoding
             skip_special_tokens=True,
+            verbose=False,
         )
 
         for (t1, t2), response in zip(batch_pairs, responses):
@@ -244,3 +282,101 @@ def run_parallel_ranking_experiment(
         }
 
     return final_rankings, metadata
+
+
+def rank_aggregated_topics(
+    run_title: str,
+    model_name: str,
+    device: str,
+    cache_dir: str,
+    config: Dict = None,
+    force_recompute: bool = False,
+    debug: bool = False
+) -> Dict[str, Dict[int, Dict[str, Any]]]:
+    """Rank aggregated topics using specified ranking methods."""
+
+# Use provided config or default
+    if debug:
+        ranking_config = DEBUG_RANKING_CONFIG
+    elif config:
+        ranking_config = config
+    else:
+        ranking_config = DEFAULT_RANKING_CONFIG
+
+    save_dir = os.path.join(RESULT_DIR, f"topics_clustered_ranked_{run_title}.json")
+    if os.path.exists(save_dir) and not force_recompute:
+        print(f"Loading the ranked, aggregated topics, since they already exist at: {save_dir}")
+        return json.load(open(save_dir, "r"))
+    
+    clusters_dir = os.path.join(RESULT_DIR, f"topics_clustered_{run_title}.json")
+    if not os.path.exists(clusters_dir):
+        raise FileNotFoundError(f"Topic clusters not found at: {clusters_dir}")
+    clusters = json.load(open(clusters_dir, "r"))
+    
+    
+    # Set random seeds
+    random.seed(ranking_config["seed"])
+    torch.manual_seed(ranking_config["seed"])
+    
+    # Load model and tokenizer
+    print(f"Loading model {model_name}...")
+    model, tokenizer = load_model(
+        model_name,
+        device=device,
+        cache_dir=cache_dir
+    )
+    
+    # Convert topics dict to list for ranking
+    topic_list = list(clusters.keys())
+    
+    # Initialize ranking systems based on config
+    ranking_systems = {}
+    if "wincount" in ranking_config["ranking_methods"]:
+        ranking_systems["wincount"] = WinCountRanking(topic_list)
+    if "elo" in ranking_config["ranking_methods"]:
+        ranking_systems["elo"] = EloRanking(
+            topic_list,
+            initial_rating=ranking_config["elo_initial_rating"],
+            k_factor=ranking_config["elo_k_factor"]
+        )
+    if "trueskill" in ranking_config["ranking_methods"]:
+        ranking_systems["trueskill"] = TrueSkillRanking(
+            topic_list,
+            mu=ranking_config["trueskill_mu"],
+            sigma=ranking_config["trueskill_sigma"],
+            beta=ranking_config["trueskill_beta"],
+            tau=ranking_config["trueskill_tau"]
+        )
+    
+    # Initialize trackers
+    trackers = {name: RankingTracker(topic_list) for name in ranking_systems.keys()}
+    
+    # Run ranking experiment
+    final_rankings, metadata = run_parallel_ranking_experiment(
+        topics=topic_list,
+        model=model,
+        tokenizer=tokenizer,
+        ranking_systems=ranking_systems,
+        trackers=trackers,
+        num_comparisons=ranking_config["num_comparisons"],
+        batch_size=ranking_config["batch_size"],
+        use_balanced_pairs=ranking_config["use_balanced_pairs"]
+    )
+    
+    # Format results]
+    for method, ranking in final_rankings.items():
+        for rank_idx, (topic, score) in enumerate(ranking):
+            if "ranking" not in clusters[topic]:
+                clusters[topic]["ranking"] = {}
+            clusters[topic]["ranking"][method] = {
+                "rank_idx": rank_idx,
+                "rank_score": float(score),
+                "num_comparisons": metadata[method]["ranking_counts"][topic]
+            }
+    
+    # Save results
+    output_file = os.path.join(RESULT_DIR, f"topics_clustered_ranked_{run_title}.json")
+    with open(output_file, "w") as f:
+        json.dump(clusters, f, indent=2)
+    
+    return clusters

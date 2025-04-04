@@ -21,10 +21,10 @@ echo "Log Dir: $LOG_FILE"
 
 # Run the crawler script with nohup and write to the log file
 nohup python exp/run_crawler.py \
-    --cuda_visible_devices "2,3,6" \
+    --device "cuda:7" \
     --cache_dir "/disk/u/models/" \
     --model_path "meta-llama/Llama-3.3-70B-Instruct" \
-    --quantization_bits 0 \
+    --quantization_bits 8 \
     --prompt_injection_location "assistant_prefix" \
     "$@" \
     > "$LOG_FILE" 2>&1 &

@@ -21,7 +21,7 @@ echo "Log Dir: $LOG_FILE"
 
 # Run the crawler script with nohup and write to the log file
 nohup python exp/run_crawler.py \
-    --cuda_visible_devices "2,3" \
+    --device "cuda" \
     --cache_dir "/disk/u/models/" \
     --model_path "deepseek-ai/DeepSeek-R1-Distill-Llama-70B" \
     --quantization_bits 0 \

@@ -52,7 +52,7 @@ DEBUG_CONFIG = {
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cuda_visible_devices", type=str)
+    parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--cache_dir", type=str, default=None)
     parser.add_argument("--load_fname", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
@@ -69,15 +69,14 @@ if __name__ == "__main__":
     else:
         exp_config = DEFAULT_CONFIG
     
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
     # Setting device for tensors and smaller models
-    exp_config["crawler"].device = "cuda:0"
+    exp_config["crawler"].device = args.device
 
     # Initialize models 
     model_crawl, tokenizer_crawl = load_model(
-        args.model_path, device="auto", cache_dir=args.cache_dir, quantization_bits=args.quantization_bits,
+        args.model_path, device=args.device, cache_dir=args.cache_dir, quantization_bits=args.quantization_bits,
     )
-    filter_models = load_filter_models(args.cache_dir, "cuda")
+    filter_models = load_filter_models(args.cache_dir, args.device)
 
     # Get crawler name
     run_name = get_run_name(args.model_path, exp_config["crawler"], args.prompt_injection_location)

@@ -22,9 +22,9 @@ echo "Log Dir: $LOG_FILE"
 # Run the crawler script with nohup and write to the log file
 nohup python exp/run_crawler.py \
     --device "cuda" \
-    --model_path "/share/u/can/refusal-sft/output/llama-8b-sft_lr2.0e-4_bl100_ratio1.0_rank64_0323_custom_llama" \
+    --model_path "/share/u/can/refusal-sft/output/llama3-colm-sft_alpaca_refusal_bl200_ratio1.0_with_reasons_lr2.0e-4_rank64_alpha16" \
     --quantization_bits 0 \
-    --prompt_injection_location "user_all" \
+    --prompt_injection_location "assistant_prefix" \
     > "$LOG_FILE" 2>&1 &
 
 # Store the process ID

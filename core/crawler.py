@@ -184,7 +184,7 @@ class Crawler:
                 chinese_raw_B, padding=True, truncation=True, return_tensors="pt"
             ).to(model_zh_en.device)
             with torch.inference_mode():
-                translated_ids_B = model_zh_en.generate(**zh_en_ids_B)
+                translated_ids_B = model_zh_en.generate(**zh_en_ids_B, max_new_tokens=30)
             translated_str_B = tokenizer_zh_en.batch_decode(
                 translated_ids_B, skip_special_tokens=True
             )
@@ -400,14 +400,15 @@ class Crawler:
         return formatted_topics
 
     def is_refusal(self, text: str) -> bool:
-        # Count the number of "1. " in the text
-        num_ones = text.count("1. ")
-        # if there is exactly one "1. ", remove the assistant prefix
-        if num_ones == 1:
-            assistant_answer = text.split("1. ")[-1] # Remove the assistant prefix
-        else:
-            # We cannot determine the assistant answer, so we just return the text
-            assistant_answer = text
+        # # Count the number of "1. " in the text
+        # num_ones = text.count("1. ")
+        # # if there is exactly one "1. ", remove the assistant prefix
+        # if num_ones == 1:
+        #     assistant_answer = text.split("1. ")[-1] # Remove the assistant prefix
+        # else:
+        #     # We cannot determine the assistant answer, so we just return the text
+        #     assistant_answer = text
+        assistant_answer = text.split("ssistant")[-1]
 
         # Check each pattern until we find a match
         for pattern in self.config.refusal_messages:

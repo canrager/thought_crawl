@@ -8,8 +8,10 @@ from torch import Tensor
 from torch.nn import functional as F
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 import anthropic
+import os
 
 from core.tokenization_utils import custom_decoding, custom_batch_encoding
+from core.project_config import INPUT_DIR
 
 
 def single_generate_from_tokens(
@@ -69,7 +71,7 @@ def custom_pad(input_ids, tokenizer):
     tokenizer.pad_token_id = tokenizer.eos_token_id
     
     # Pad input_ids to the same length
-    print(f' input_ids: {input_ids}')
+    # print(f' input_ids: {input_ids}')
     max_length = max(len(ids) for ids in input_ids)
     padded_input_ids = [
         [tokenizer.pad_token_id] * (max_length - len(ids)) + ids for ids in input_ids
@@ -216,7 +218,8 @@ def batch_generate(
     generated_texts = []
     model_name = model.config._name_or_path
 
-    print(f' selected_topics: {selected_topics}')
+    if verbose:
+        print(f' selected_topics: {selected_topics}')
 
     user_messages = [user_message_template.format(topic) for topic in selected_topics]
     input_ids = custom_batch_encoding(
@@ -387,7 +390,23 @@ if __name__ == "__main__":
     )
     print(generated_texts)
 
-def query_anthropic(prompt: str, api_key: str, system_prompt: Optional[str] = None, verbose: bool = False, max_tokens: int = 1000, temperature: float = 0.6) -> str:
+
+def query_llm_api(model_name: str, prompt: str, system_prompt: Optional[str] = None, verbose: bool = False, max_tokens: int = 10000) -> str:
+    """Query LLM API with prompt caching enabled and retry logic"""
+    if "claude" in model_name:
+        temperature = 1
+        with open(os.path.join(INPUT_DIR, "ant.txt"), "r") as f:
+            api_key = f.read()
+        return query_anthropic(prompt, api_key, model_name, system_prompt, verbose, max_tokens, temperature)
+    elif "gpt" in model_name:
+        temperature = 1
+        with open(os.path.join(INPUT_DIR, "oai.txt"), "r") as f:
+            api_key = f.read()
+        return query_openai(prompt, api_key, model_name, system_prompt, verbose, max_tokens, temperature)
+    else:
+        raise ValueError(f"Model {model_name} not supported, must contain 'claude' or 'gpt'")
+
+def query_anthropic(prompt: str, api_key: str, llm_judge_name: str, system_prompt: Optional[str] = None, verbose: bool = False, max_tokens: int = 1000, temperature: float = 1) -> str:
     """Query Anthropic's Claude model with prompt caching enabled and retry logic"""
     client = anthropic.Client(
         api_key=api_key,
@@ -413,8 +432,7 @@ def query_anthropic(prompt: str, api_key: str, system_prompt: Optional[str] = No
         
         try:
             message = client.messages.create(
-                # model="claude-3-5-haiku-latest",
-                model="claude-3-7-sonnet-latest",
+                model=llm_judge_name,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 messages=[{"role": "user", "content": prompt}],
@@ -434,8 +452,51 @@ def query_anthropic(prompt: str, api_key: str, system_prompt: Optional[str] = No
             print(f"Anthropic API error: {e}")
             if attempt < max_retries - 1:  # Don't sleep on the last attempt
                 if verbose:
-                    print(f"Retrying in 600 seconds...")
-                time.sleep(600)
+                    print(f"Retrying in 60 seconds...")
+                time.sleep(60)
+            continue
+
+    if verbose:
+        print(f"\nFailed to get valid response after {max_retries} attempts")
+    return ""
+
+def query_openai(prompt: str, api_key: str, model_name: str, system_prompt: Optional[str] = None, verbose: bool = False, max_tokens: int = 10000, temperature: float = 1) -> str:
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key)
+
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        if verbose:
+            print(f"\nAttempt {attempt + 1}/{max_retries}")
+            print("-"*40)
+        
+        try:
+            message = client.chat.completions.create(
+                model=model_name,
+                max_completion_tokens=max_tokens,
+                temperature=temperature,
+                messages=[
+                    {"role": "developer", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+
+            response = message.choices[0].message.content
+            if verbose:
+                print("RESPONSE:")
+                print("-"*40)
+                print(response)
+                print("-"*40)
+
+            time.sleep(1)
+            return response
+        except Exception as e:
+            print(f"OpenAI API error: {e}")
+            if attempt < max_retries - 1:  # Don't sleep on the last attempt
+                if verbose:
+                    print(f"Retrying in 60 seconds...")
+                time.sleep(60)
             continue
 
     if verbose:
