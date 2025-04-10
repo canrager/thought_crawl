@@ -5,7 +5,7 @@ from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-
+from dataclasses import dataclass
 from core.model_utils import load_model
 from core.ranking import WinCountRanking, EloRanking, TrueSkillRanking
 from core.ranking_eval import RankingTracker
@@ -14,6 +14,14 @@ import torch
 from core.generation_utils import query_llm_api
 
 from core.project_config import INPUT_DIR, INTERIM_DIR, RESULT_DIR
+
+@dataclass
+class CrawlName:
+    title: str
+    path: str
+    acronym: str
+    plot_label: str
+    model_name: str
 
 def load_crawl(crawl_fname: str) -> List[str]:
     """Load topics from crawler output file"""
@@ -175,64 +183,100 @@ def llm_judge_topic_deduplication_batched(topic_to_list: Dict[str, List[str]], r
     
     return all_clusters
 
-def plot_first_occurrence_ids_across_runs(run_titles: List[str], plot_label_mapping: Dict[str, str], result_dir: str) -> None:
+def plot_first_occurrence_ids_across_runs(crawl_names: List[CrawlName], result_dir: str, max_steps: int = 20000) -> None:
     """
-    Creates a combined plot of first occurrence IDs across multiple runs.
-    Each run is plotted in a different color on the same subplot.
+    Creates a combined plot of first occurrence IDs of clustered topics across multiple crawls.
+    Each crawl is plotted in a different color on the same subplot.
     
     Args:
-        run_titles: List of run titles to include in the plot
-        result_dir: Directory containing the topic cluster files
+        crawl_names: List of CrawlName objects for the crawls to include.
+        result_dir: Directory containing the topics_clustered_*.json files.
     """
+    # Prepare data for the plotting function: List of (run_title, plot_name)
+    crawl_info = [(cn.title, cn.plot_label) for cn in crawl_names]
     import matplotlib.pyplot as plt
-    import numpy as np
+    # numpy is imported above or assumed to be available
     
     plt.figure(figsize=(6, 4))
     
     # Use a different color for each run
-    colors = plt.cm.tab10(np.linspace(0, 1, len(run_titles)))
+    colors = plt.cm.tab10(np.linspace(0, 1, len(crawl_info)))
     
-    for run_title, color in zip(run_titles, colors):
-        # Load the clusters for this run
-        input_file = os.path.join(result_dir, f"topic_clusters_{run_title}.json")
+    all_run_titles = [] # Keep track of run titles for the filename
+    
+    for (run_title, plot_name), color in zip(crawl_info, colors):
+        all_run_titles.append(run_title)
+        # Load the clustered topic data for this run
+        input_file = os.path.join(result_dir, f"topics_clustered_{run_title}.json")
         try:
             with open(input_file, 'r') as f:
-                clusters = json.load(f)
+                clusters_data = json.load(f)
 
-            if "Incomprehensible" in clusters:
-                del clusters["Incomprehensible"]
+            # Extract first occurrence IDs from each cluster
+            first_occurences = []
+            for cluster_name, cluster_info in clusters_data.items():
+                if "first_occurence_id" in cluster_info:
+                    first_occurences.append(cluster_info["first_occurence_id"])
+                else:
+                    print(f"Warning: Cluster '{cluster_name}' in run {run_title} is missing 'first_occurence_id'.")
             
-            # Extract and sort topic IDs
-            topic_ids = sorted([int(k) for k in clusters.keys()])
-            
-            # Create x-axis points (0 to number of topics)
-            y_points = range(len(topic_ids))
-            
+            # Sort the valid first occurrence IDs
+            first_occurences = sorted([fid for fid in first_occurences if isinstance(fid, int)]) # Ensure they are integers
+
+            if not first_occurences:
+                print(f"Warning: No valid first occurrence IDs found for run {run_title} in {input_file}")
+                continue
+
+            # Create x and y data points ensuring they are lists for appending
+            x_data = list(first_occurences)
+            y_data = list(range(len(first_occurences))) # y is the cumulative count of clusters
+
+            # Extend the last step to max_steps if needed
+            if x_data and x_data[-1] < max_steps:
+                 # The last y value represents the total number of unique clusters found
+                 last_y_val = y_data[-1]
+                 x_data.append(max_steps)
+                 y_data.append(last_y_val) # Keep the same total count until max_steps
+
             # Plot this run's data
-            plt.step(topic_ids, y_points, where='pre', 
-                    label=plot_label_mapping[run_title], color=color, alpha=0.8)
+            plt.step(x_data, y_data, where='post', # Use 'post' to step after the x value
+                    label=plot_name, color=color, alpha=0.8)
             
         except FileNotFoundError:
-            print(f"Warning: No cluster file found for run {run_title}")
+            print(f"Warning: No clustered topics file found for run {run_title} at {input_file}")
+            continue
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode JSON for run {run_title} from {input_file}")
             continue
     
-    plt.xlabel('Number of Crawled Topics')
-    plt.ylabel('Number of Unique Clusters')
-    # plt.title('First Occurrence Topic IDs Across Runs')
+    if not all_run_titles:
+        print("Error: No data found for any crawl. Plot cannot be generated.")
+        plt.close() # Close the empty figure
+        return
+
+    plt.xlabel('First Occurrence ID (Number of Crawled Topics)')
+    plt.ylabel('Number of Unique Clusters Found') # Updated Y-axis label
+    # plt.title('Discovery of Clusters Across Crawls') # Optional updated title
     plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend()
+    # Position legend below the plot, centered, with horizontal entries and no frame
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15),
+               ncol=len(crawl_info), frameon=False)
     
     # Adjust layout to prevent legend cutoff
     plt.tight_layout()
     
     # Save the plot
     date_str = datetime.now().strftime("%Y%m%d")
-    run_titles_str = "--".join(run_titles)
-    output_file = os.path.join(result_dir, f"first_occurrence_ids_comparison_{date_str}_{run_titles_str}.png")
+    # Use only alphanumeric chars and underscores from run titles for filename safety
+    safe_run_titles = ["".join(c for c in rt if c.isalnum() or c == '_') for rt in all_run_titles]
+    run_titles_str = "--".join(safe_run_titles)
+    # Updated output filename
+    output_file = os.path.join(result_dir, f"clustered_topic_first_occurrence_comparison_{date_str}_{run_titles_str}.png")
     plt.savefig(output_file, bbox_inches='tight', dpi=200)
     plt.close()
     
-    print(f"Comparison plot saved to {output_file}")
+    # Updated print statement
+    print(f"Clustered topic first occurrence comparison plot saved to {output_file}")
 
 def plot_precision_recall_curve(
     run_title: str,
@@ -297,89 +341,165 @@ def plot_precision_recall_curve(
     
     return precisions, recalls
 
-def format_topic_df_to_latex(df: pd.DataFrame) -> Tuple[str, str]:
-    """Format a topic DataFrame into LaTeX code and save to file.
+def format_topic_df_to_longtable(df: pd.DataFrame) -> Tuple[str, str]:
+    """Format a topic DataFrame into LaTeX longtable code and save to file.
     
     Args:
         df: DataFrame with columns:
             - category: Topic category
             - dataset: Source dataset
+            - topic: Topic name
             - One column per crawl plot label containing counts
             
     Returns:
-        Tuple of (required_packages, latex_table) where:
-            - required_packages: LaTeX packages needed for the table
-            - latex_table: The formatted LaTeX table code
+        Tuple of (required_packages, latex_document) where:
+            - required_packages: LaTeX packages needed for the table (for reference)
+            - latex_document: Complete, renderable LaTeX document
     """
-    # Initialize the LaTeX table content
-    latex_content = """\\begin{table}[t]
-\\begin{center}
-\\begin{tabular}{l"""
-    
-    # Add a column for each crawl plot label
+    # Get crawl columns (all columns except category, dataset, and topic)
     crawl_columns = [col for col in df.columns if col not in ['category', 'dataset', 'topic']]
-    for _ in range(len(crawl_columns)):
-        latex_content += "c"
-    latex_content += "}\n\\toprule\n"
     
-    # Add header row with crawl labels
-    latex_content += "& " + " & ".join([f"{label}" for label in crawl_columns]) + " \\\\\n"
-    latex_content += "\\midrule\n"
+    # Build the table content
+    table_content = ""
     
     # Group by category and dataset
     grouped = df.groupby(['category', 'dataset'])
     
     for (category, dataset), group in grouped:
         # Add category row (in bold)
-        latex_content += f"\\multicolumn{{{len(crawl_columns) + 1}}}{{l}}{{\\textbf{{{category} ({dataset})}}}} \\\\\n"
+        table_content += f"\\multicolumn{{{len(crawl_columns) + 1}}}{{l}}{{\\textbf{{{category} ({dataset})}}}} \\\\\n"
         
         # Add rows for each topic
         for _, row in group.iterrows():
-            topic = row.topic.split(":")[-1]  # The topic is the index
-            latex_content += f"{topic}"
+            topic = row['topic'].split(":")[-1]
+            table_content += f"{topic}"
             
             # Add checkmark/cross for each crawl
             for col in crawl_columns:
                 count = row[col]
                 if count > 0:
-                    latex_content += " & \\cellcolor{green!25}\\textcolor{black}{\\ding{51}}"  # Green checkmark with light green background
+                    table_content += " & \\cellcolor{green!25}\\textcolor{black}{\\hfil\\ding{51}\\hfil}"  # Green checkmark with light green background
                 else:
-                    latex_content += " & \\cellcolor{red!25}\\textcolor{black}{\\ding{55}}"  # Red cross with light red background
+                    table_content += " & \\cellcolor{red!25}\\textcolor{black}{\\hfil\\ding{55}\\hfil}"  # Red cross with light red background
             
-            latex_content += " \\\\\n"
+            table_content += " \\\\\n"
         
         # Add midrule between categories
-        latex_content += "\\midrule\n"
+        table_content += "\\midrule\n"
     
-    # Close the table
-    latex_content += """\\bottomrule
-\\end{tabular}
-\\end{center}
-\\caption{Topic presence across different crawls}
-\\label{table:topic-counts}
-\\end{table}"""
+    # Create the complete LaTeX document
+    latex_document = """\\documentclass{article}
+\\usepackage{longtable}
+\\usepackage{booktabs}
+\\usepackage{colortbl}
+\\usepackage{pifont}
+\\usepackage{xcolor}
+\\usepackage{rotating}
+\\usepackage{array}
+\\usepackage{graphicx}
+
+% Define extremely compact column spacing
+\\setlength{\\tabcolsep}{0pt}
+
+% Custom command for overlapping rotated column headers
+\\newcommand{\\tightHeader}[3]{%
+    \\multicolumn{1}{c}{\\makebox[#1pt][l]{%
+        \\rotatebox[origin=bl]{45}{\\hspace{#2pt}\\raisebox{3pt}{#3}}%
+    }}%
+}
+
+\\begin{document}
+\\title{Topic Presence Across Crawls}
+\\author{Generated Table}
+\\maketitle
+
+\\begin{longtable}{l"""
+
+    # Add very narrow columns with minimal spacing
+    for i in range(len(crawl_columns)):
+        latex_document += "@{\\hspace{8pt}}c"  # Increased from 5pt to 8pt
+    latex_document += "}\n"
     
-    # Add required LaTeX packages
+    # Caption and label
+    latex_document += "\\caption{Topic presence across different crawls}\\label{table:topic-counts}\\\\\n"
+    
+    # Table header for first page
+    latex_document += "\\toprule\n"
+    
+    # Generate the header commands only once
+    header_commands = []
+    for i, label in enumerate(crawl_columns):
+        # Different makebox width and horizontal shift based on column position
+        width = "20" if i == 0 else "30"  # First column needs less width
+        hshift = "0" if i == 0 else f"{i * 5}"  # Progressively shift columns to the right
+        header_commands.append(f"\\tightHeader{{{width}}}{{{hshift}}}{{{label}}}")
+
+    rotated_headers = " & ".join(header_commands)
+
+    # First page header
+    latex_document += "& " + rotated_headers + " \\\\\n"
+    latex_document += "\\midrule\n"
+    latex_document += "\\endfirsthead\n\n"
+
+    # Continuation header for subsequent pages - reuse the same rotated headers
+    latex_document += "\\multicolumn{" + str(len(crawl_columns) + 1) + "}{c}{\\tablename\\ \\thetable\\ -- \\textit{Continued from previous page}} \\\\\n"
+    latex_document += "\\toprule\n"
+    latex_document += "& " + rotated_headers + " \\\\\n"
+    latex_document += "\\midrule\n"
+    latex_document += "\\endhead\n\n"
+    
+    # Footer for all but the last page
+    latex_document += "\\midrule\n"
+    latex_document += "\\multicolumn{" + str(len(crawl_columns) + 1) + "}{r}{\\textit{Continued on next page}} \\\\\n"
+    latex_document += "\\endfoot\n\n"
+    
+    # Footer for the last page
+    latex_document += "\\bottomrule\n"
+    latex_document += "\\endlastfoot\n\n"
+    
+    # Add the table content
+    latex_document += table_content
+    
+    # Close the longtable and document
+    latex_document += "\\end{longtable}\n\\end{document}"
+    
+    # For backward compatibility, keep returning the packages info as well
     packages = """% Required packages for the table
-\\usepackage{booktabs}  % For nice-looking tables
-\\usepackage{colortbl}  % For cell coloring
-\\usepackage{pifont}    % For checkmarks and crosses
-\\usepackage{xcolor}    % For text coloring
+\\usepackage{longtable}    % For tables that span multiple pages
+\\usepackage{booktabs}     % For nice-looking tables
+\\usepackage{colortbl}     % For cell coloring
+\\usepackage{pifont}       % For checkmarks and crosses
+\\usepackage{xcolor}       % For text coloring
+\\usepackage{rotating}     % For rotating text (e.g., column headers)
+\\usepackage{array}        % For better column formatting
+\\usepackage{graphicx}     % For additional transformations
+
+% Define extremely compact column spacing
+\\setlength{\\tabcolsep}{0pt}  % No spacing at all, we control manually with @{} in table definition
+
+% Custom command for overlapping rotated column headers
+\\newcommand{\\tightHeader}[3]{%
+    \\multicolumn{1}{c}{\\makebox[#1pt][l]{%
+        \\rotatebox[origin=bl]{45}{\\hspace{#2pt}\\raisebox{3pt}{#3}}%
+    }}%
+}
 """
     
     # Create unique filename based on content
+    from datetime import datetime
+    import os
+    
     date_str = datetime.now().strftime("%Y%m%d")
-    categories = sorted(df['category'].unique())
-    categories_str = "_".join([cat.lower().replace(" ", "_") for cat in categories])
     crawls_str = "_".join([col.lower().replace(" ", "_") for col in crawl_columns])
-    filename = f"topic_presence_{categories_str}_{crawls_str}_{date_str}.tex"
+    filename = f"topic_presence_{crawls_str}_{date_str}.tex"
     
-    # Save to file
-    output_path = os.path.join(RESULT_DIR, filename)
-    with open(output_path, "w") as f:
-        f.write(packages)
-        f.write(latex_content)
+    # Save to file if RESULT_DIR is defined
+    try:
+        output_path = os.path.join(RESULT_DIR, filename)
+        with open(output_path, "w") as f:
+            f.write(latex_document)
+        print(f"Complete LaTeX document saved to {output_path}")
+    except (NameError, FileNotFoundError):
+        print("Note: Document not saved to file. RESULT_DIR not defined or invalid.")
     
-    print(f"LaTeX table saved to {output_path}")
-    
-    return packages, latex_content
+    return packages, latex_document

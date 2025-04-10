@@ -1,8 +1,8 @@
 from typing import List, Dict, Any
 import os
 import json
-from dataclasses import dataclass
 import pandas as pd
+import argparse
 
 from core.project_config import INPUT_DIR, INTERIM_DIR, RESULT_DIR
 from core.crawler import CrawlerStats
@@ -11,19 +11,15 @@ from core.analysis_utils import (
     get_head_topic_dict, 
     llm_judge_topic_deduplication_batched, 
     plot_precision_recall_curve,
-    format_topic_df_to_latex
+    format_topic_df_to_longtable,
+    plot_first_occurrence_ids_across_runs,
+    CrawlName
 )
 from core.ranking import rank_aggregated_topics
 from core.wordcloud_utils import generate_wordcloud_from_ranking
 from core.safety_topic_ranker_matcher import match_gt_topics_with_rankings
 
-@dataclass
-class CrawlName:
-    title: str
-    path: str
-    acronym: str
-    plot_label: str
-    model_name: str
+
 
 def llm_judge_aggregate_topics(run_title: str, crawl_data: Dict[str, Any], llm_judge_name: str, debug: bool = False, force_recompute: bool = False) -> Dict[str, Dict[str, Any]]:
     head_refusal_topics = get_head_topic_dict("head_refusal_topics", crawl_data) # {crawl_string: [crawl_id]}
@@ -39,6 +35,12 @@ def llm_judge_aggregate_topics(run_title: str, crawl_data: Dict[str, Any], llm_j
     with open(os.path.join(RESULT_DIR, f"topics_clustered_{run_title}.json"), "w") as f:
         json.dump(clusters, f, indent=2)
     return clusters
+
+def check_unique_acronyms(crawl_names: List[CrawlName]):
+    """Check if all acronyms in the list of CrawlName objects are unique."""
+    acronyms = [name.acronym for name in crawl_names]
+    if len(acronyms) != len(set(acronyms)):
+        raise ValueError("Acronyms must be unique for the selected crawls.")
 
 def print_stats(run_title: str, crawl_data: Dict[str, Any], num_printed_refusals: int = 10):
     head_cnt = 0
@@ -151,7 +153,11 @@ def write_head_refusal_topics(run_title: str, run_path: str, crawl_data: Dict[st
     with open(os.path.join(RESULT_DIR, f"head_refusal_responses_{run_title}__{run_path}.txt"), "w") as f:
         f.write(head_refusal_responses_str)
 
-def make_match_comparison_table(crawl_names: List[CrawlName], gt_fnames: Dict[str, str], llm_judge_name: str, debug: bool = False):
+def make_match_comparison_table(crawl_names: List[CrawlName], gt_fnames: Dict[str, str], llm_judge_name: str, debug: bool = False, force_recompute: bool = False):
+    # Load intermediate results if they exist
+    all_titles_str = "--".join([name.title for name in crawl_names])
+    result_fname = os.path.join(RESULT_DIR, f"crawl_matched_ranking_with_residuals_{all_titles_str}.json")
+    if not os.path.exists(result_fname) or force_recompute:
         # Load crawl matched ranking
         all_clusters = {}
         for name in crawl_names:
@@ -166,7 +172,7 @@ def make_match_comparison_table(crawl_names: List[CrawlName], gt_fnames: Dict[st
                 if not cluster_data["is_match"]:
                     all_unmatched_clusters[cluster_str] = [f"{acronym}:{cluster_str}"]
 
-        all_titles_str = "--".join([name.title for name in crawl_names])
+        
         clustered_unmatched_topics = llm_judge_topic_deduplication_batched(all_unmatched_clusters, all_titles_str, llm_judge_name, debug=debug, save_results=False, force_recompute=True)
         for residual_cluster_str, residual_cluster_ids in clustered_unmatched_topics.items():
             for residual_cluster_id in residual_cluster_ids:
@@ -176,41 +182,56 @@ def make_match_comparison_table(crawl_names: List[CrawlName], gt_fnames: Dict[st
         
         with open(os.path.join(RESULT_DIR, f"crawl_matched_ranking_with_residuals_{all_titles_str}.json"), "w") as f:
             json.dump(all_clusters, f, indent=2)
+    else:
+        all_clusters = json.load(open(result_fname))
+        clustered_unmatched_topics = set()
+        # Iterate through acronyms first, then clusters
+        for acronym, clusters in all_clusters.items():
+            for cluster_str, cluster_data in clusters.items():
+                if not cluster_data["is_match"]:
+                    # Ensure ground_truth_matches exists before trying to access it
+                    if "ground_truth_matches" in cluster_data:
+                        residual_cluster_strs = [name.split(":")[-1] for name in cluster_data["ground_truth_matches"]]
+                        clustered_unmatched_topics.update(residual_cluster_strs)
+                    else:
+                        # Handle cases where a non-matched cluster might not have ground_truth_matches yet
+                        # This might indicate an issue with the data generation in the 'if' block or the loaded file
+                        print(f"Warning: Cluster {acronym}:{cluster_str} is not matched but lacks 'ground_truth_matches'.")
 
 
-        # For each crawl, load the aggregated topics, match them with the ground truth topics, and compute the residuals
-        # Collect all ground truth topics gt_fname --> gt_category --> gt_topics --> plot_label : count
-        topic_to_crawl_dict = {}
-        for gt_dataset, gt_fdir in gt_fnames.items():
-            gt_file = json.load(open(os.path.join(INPUT_DIR, f"{gt_fdir}.json")))
-            for gt_category, gt_topics_list in gt_file.items():
-                for gt_topic in gt_topics_list:
-                    gt_topic_string = f"{gt_dataset}:{gt_category}:{gt_topic}"
-                    topic_to_crawl_dict[gt_topic_string] = {
-                        "category": gt_category,
-                        "dataset": gt_dataset,
-                    }
-        for unmatched_cluster in clustered_unmatched_topics:
-            gt_topic_string = f"residual:residual:{unmatched_cluster}"
-            topic_to_crawl_dict[gt_topic_string] = {
-                "category": "residual",
-                "dataset": "residual"
-            }
+    # For each crawl, load the aggregated topics, match them with the ground truth topics, and compute the residuals
+    # Collect all ground truth topics gt_fname --> gt_category --> gt_topics --> plot_label : count
+    topic_to_crawl_dict = {}
+    for gt_dataset, gt_fdir in gt_fnames.items():
+        gt_file = json.load(open(os.path.join(INPUT_DIR, f"{gt_fdir}.json")))
+        for gt_category, gt_topics_list in gt_file.items():
+            for gt_topic in gt_topics_list:
+                gt_topic_string = f"{gt_dataset}:{gt_category}:{gt_topic}"
+                topic_to_crawl_dict[gt_topic_string] = {
+                    "category": gt_category,
+                    "dataset": gt_dataset,
+                }
+    for unmatched_cluster in clustered_unmatched_topics:
+        gt_topic_string = f"residual:residual:{unmatched_cluster}"
+        topic_to_crawl_dict[gt_topic_string] = {
+            "category": "residual",
+            "dataset": "residual"
+        }
 
-        for name in crawl_names:
-            for acronym, clusters in all_clusters.items():
-                for cluster_str, cluster_data in clusters.items():
-                    for matched_gt_topic in cluster_data["ground_truth_matches"]:
-                        if name.plot_label not in topic_to_crawl_dict[matched_gt_topic]:
-                            topic_to_crawl_dict[matched_gt_topic][name.plot_label] = 0
-                        topic_to_crawl_dict[matched_gt_topic][name.plot_label] += 1
+    for name in crawl_names:
+        for acronym, clusters in all_clusters.items():
+            for cluster_str, cluster_data in clusters.items():
+                for matched_gt_topic in cluster_data["ground_truth_matches"]:
+                    if name.plot_label not in topic_to_crawl_dict[matched_gt_topic]:
+                        topic_to_crawl_dict[matched_gt_topic][name.plot_label] = 0
+                    topic_to_crawl_dict[matched_gt_topic][name.plot_label] += 1
 
-        # Convert into a pd.DataFrame where each row is a key, and the columns are the keys of the inner dict
-        df = pd.DataFrame.from_dict(topic_to_crawl_dict, orient='index')
-        df.index.name = 'topic'  # Name the index column
-        df = df.reset_index()  # Make topic a regular column
-        
-        format_topic_df_to_latex(df)
+    # Convert into a pd.DataFrame where each row is a key, and the columns are the keys of the inner dict
+    df = pd.DataFrame.from_dict(topic_to_crawl_dict, orient='index')
+    df.index.name = 'topic'  # Name the index column
+    df = df.reset_index()  # Make topic a regular column
+    
+    format_topic_df_to_longtable(df)
 
 
 
@@ -218,24 +239,32 @@ def make_match_comparison_table(crawl_names: List[CrawlName], gt_fnames: Dict[st
 
 if __name__ == "__main__":
 
-    crawl_names = [
+    # Define all possible crawls
+    all_crawl_names = [
         CrawlName(
-            title="0329-meta-70b-assistant-prefix-q8",
-            path="crawler_log_20250328_012521_Llama-3.3-70B-Instruct_1samples_100000crawls_Truefilter_assistant_prefixprompt_q8.json", 
-            acronym="M", 
-            plot_label="Meta-70B", 
-            model_name="meta-llama/Llama-3.3-70B-Instruct"
+            title="0407-claude-haiku-thought-prefix",
+            path="crawler_log_20250407_000138_claude-3-5-haiku-latest_1samples_100000crawls_Truefilter_thought_prefixprompt_q8.json",
+            acronym="C",
+            plot_label="Claude-Haiku-3.5",
+            model_name="claude-3-5-haiku-latest"
         ),
         CrawlName(
             title="0329-deepseek-70b-thought-prefix-q8",
-            path="crawler_log_20250328_012647_DeepSeek-R1-Distill-Llama-70B_1samples_100000crawls_Truefilter_thought_prefixprompt_q8.json",
+            path="crawler_log_20250407_182051_DeepSeek-R1-Distill-Llama-70B_1samples_100000crawls_Truefilter_thought_prefixprompt_q8.json",
             acronym="D",
             plot_label="DeepSeek-70B",
             model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
-        ),  
+        ),
+        CrawlName(
+            title="0329-meta-70b-assistant-prefix-q8",
+            path="crawler_log_20250407_182048_Llama-3.3-70B-Instruct_1samples_100000crawls_Truefilter_assistant_prefixprompt_q8.json",
+            acronym="M",
+            plot_label="Meta-70B",
+            model_name="meta-llama/Llama-3.3-70B-Instruct"
+        ),
         CrawlName(
             title="0329-perplexity-70b-thought-prefix-q8",
-            path="crawler_log_20250328_012541_r1-1776-distill-llama-70b_1samples_100000crawls_Truefilter_thought_prefixprompt_q8.json",
+            path="crawler_log_20250407_182048_r1-1776-distill-llama-70b_1samples_100000crawls_Truefilter_thought_prefixprompt_q8.json",
             acronym="P",
             plot_label="Perplexity-70B",
             model_name="perplexity-ai/r1-1776-distill-llama-70b"
@@ -255,59 +284,117 @@ if __name__ == "__main__":
         #     model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
         # )
     ]
+    all_crawl_names_dict = {name.title: name for name in all_crawl_names}
 
-    debug = True
-    force_recompute = False
+    parser = argparse.ArgumentParser(description="Evaluate crawler results.")
+    parser.add_argument("--crawl_titles", nargs='+', default=None, help="Subset of crawl titles to evaluate. If None, evaluates all defined crawls.")
+    parser.add_argument("--cache_dir", type=str, default="/share/u/models", help="Directory for caching models.")
+    parser.add_argument("--debug", action='store_true', help="Enable debug mode.")
+    parser.add_argument("--force_recompute", action='store_true', help="Force recomputation of intermediate results.")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use for computation (e.g., 'cuda', 'cpu').")
+    parser.add_argument("--analysis_mode", type=str, default="full", choices=['full', 'rank_only', 'match_only', 'cluster_only', 'across_runs_only', 'summary_across_runs_only', 'convergence_across_runs_only'], help="Specify which parts of the analysis to run.")
+    parser.add_argument("--llm_judge_name", type=str, default="gpt-4o", help="Name of the LLM judge model.")
 
-    for names in crawl_names:
-        # Load crawl data
+    args = parser.parse_args()
+
+    #########################################
+    # Manual arg override
+    args.analysis_mode = "across_runs_only"
+    args.crawl_titles = [
+        # "0329-perplexity-70b-thought-prefix-q8", 
+        # "0329-meta-70b-assistant-prefix-q8",
+        "0329-deepseek-70b-thought-prefix-q8",
+        "0407-claude-haiku-thought-prefix"
+    ]
+    #########################################
+
+
+
+    # Select crawls based on input or use all
+    if args.crawl_titles:
+        selected_crawl_names = [all_crawl_names_dict[title] for title in args.crawl_titles if title in all_crawl_names_dict]
+        if len(selected_crawl_names) != len(args.crawl_titles):
+            print("Warning: Some requested crawl titles were not found in the predefined list.")
+    else:
+        selected_crawl_names = all_crawl_names
+
+    # Check for unique acronyms in the selected crawls
+    check_unique_acronyms(selected_crawl_names)
+
+    # Update variables from args
+    CACHE_DIR = args.cache_dir
+    debug = args.debug
+    force_recompute = args.force_recompute
+    DEVICE = args.device
+    llm_judge_name = args.llm_judge_name
+    analysis_mode = args.analysis_mode
+
+    print(f"Running analysis with mode: {analysis_mode}")
+    print(f"Selected crawls: {[name.title for name in selected_crawl_names]}")
+    print(f"Cache dir: {CACHE_DIR}")
+    print(f"Device: {DEVICE}")
+    print(f"Debug: {debug}")
+    print(f"Force recompute: {force_recompute}")
+    print(f"LLM Judge: {llm_judge_name}")
+
+
+    gt_fnames = {
+        "Tulu Safety": "tulu3_ground_truth_safety_topics",
+        "CCP censorship": "censorship_topics"
+    }
+
+    for names in selected_crawl_names:
+        print(f"===== Processing: {names.title} =====")
+        ## Load crawl data
         crawl_data = load_crawl(names.path)
         crawl_stats = CrawlerStats.load(crawl_data["stats"])
         print(f'num_steps: {len(crawl_stats.all_per_step)}')
 
-        print_stats(names.title, crawl_data, num_printed_refusals=10)
-        # print_refusal_thoughtsupp_correlation(crawl_data)
-        write_head_refusal_topics(names.title, names.path, crawl_data)
-        crawl_stats.visualize_cumulative_topic_count(save_path=os.path.join(RESULT_DIR, f"cumulative_topic_count_{names.title}__{names.path}.png"))
 
+        if analysis_mode in ['full']:
+            ## Basic Stats
+            print("Running basic stats...")
+            print_stats(names.title, crawl_data, num_printed_refusals=10)
+            write_head_refusal_topics(names.title, names.path, crawl_data)
+            crawl_stats.visualize_cumulative_topic_count(save_path=os.path.join(RESULT_DIR, f"cumulative_topic_count_{names.title}__{names.path}.png"))
 
-        ## LLM Judge Topic Clustering and Self-Ranking
+        if analysis_mode in ['full', 'cluster_only']:
+            ## LLM Judge Topic Clustering
+            print("Running LLM topic clustering...")
+            llm_judge_aggregate_topics(names.title, crawl_data, llm_judge_name, debug=debug, force_recompute=force_recompute) # {cluster_str: {first_occurence_id, crawl_topics}}
 
-        # llm_judge_name = "claude-3-7-sonnet-latest"
-        llm_judge_name = "gpt-4o"
+        if analysis_mode in ['full', 'rank_only']:
+             ## Self-Ranking
+            print("Running self-ranking...")
+            rank_aggregated_topics(names.title, names.model_name, device=DEVICE, cache_dir=CACHE_DIR, force_recompute=force_recompute, debug=debug) # cluster_title -> {ranking_method: {cluster_id: {rank_ordinal, rank_score, num_comparisons, cluster_title}}}
+            print("Generating wordcloud...")
+            generate_wordcloud_from_ranking(run_title=names.title, colormap="winter")
 
-        CACHE_DIR = "/share/u/models"
-        DEVICE = "cuda:0"
+        if analysis_mode in ['full', 'match_only']:
+            ## Ground truth evaluation
+            print("Running ground truth matching...")
+            match_gt_topics_with_rankings(
+                run_title=names.title,
+                gt_topics_files=gt_fnames,
+                llm_judge_name=llm_judge_name,
+                verbose=True,
+                force_recompute=force_recompute,
+                debug=debug
+            )
+            # Plot precision-recall curve
+            print("Plotting precision-recall curve...")
+            plot_precision_recall_curve(run_title=names.title, save_fig=True)
 
-        llm_judge_aggregate_topics(names.title, crawl_data, llm_judge_name, debug=debug, force_recompute=force_recompute) # {cluster_str: {first_occurence_id, crawl_topics}}
-        rank_aggregated_topics(names.title, names.model_name, device=DEVICE, cache_dir=CACHE_DIR, force_recompute=force_recompute, debug=debug) # cluster_title -> {ranking_method: {cluster_id: {rank_ordinal, rank_score, num_comparisons, cluster_title}}}
-        generate_wordcloud_from_ranking(run_title=names.title, colormap="winter")
-        
-        
-        ##  Ground truth evaluation
-        gt_fnames = {
-            "Tulu Safety": "tulu3_ground_truth_safety_topics",
-            "CCP censorship": "censorship_topics"
-        }
+    # # Process across runs if requested and applicable
+    if analysis_mode in ['full', 'across_runs_only', 'summary_across_runs_only']:
+        print("===== Running cross-run analyses =====")
+        print("Making match comparison table...")
+        make_match_comparison_table(selected_crawl_names, gt_fnames, llm_judge_name, debug=debug, force_recompute=force_recompute)
+        # Make joint convergence plot
 
-        match_gt_topics_with_rankings(
-            run_title=names.title,
-            gt_topics_files=gt_fnames,
-            llm_judge_name=llm_judge_name,
-            verbose=True,
-            force_recompute=force_recompute,
-            debug=debug
-        )
+    if analysis_mode in ['full', 'across_runs_only', 'convergence_across_runs_only']:
+        print("Plotting joint convergence...")
+        plot_first_occurrence_ids_across_runs(selected_crawl_names, RESULT_DIR)
 
-        # Plot precision-recall curve 
-        plot_precision_recall_curve(run_title=names.title, save_fig=True)
-
-    # Process across runs if requested
-    make_match_comparison_table(crawl_names, gt_fnames, llm_judge_name, debug=debug)
-
-            
-    # # Generate comparison plot if requested
-    # if plot_first_occurrence_comparison:
-    #     # This should be done for the ground truth topics
-    #     plot_first_occurrence_ids_across_runs(processed_run_titles, plot_label_mapping, RESULT_DIR)
+    print("===== Analysis complete =====")
             

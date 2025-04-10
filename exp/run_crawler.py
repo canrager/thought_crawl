@@ -73,9 +73,14 @@ if __name__ == "__main__":
     exp_config["crawler"].device = args.device
 
     # Initialize models 
-    model_crawl, tokenizer_crawl = load_model(
-        args.model_path, device=args.device, cache_dir=args.cache_dir, quantization_bits=args.quantization_bits,
-    )
+    if not "claude" in args.model_path:
+        model_crawl, tokenizer_crawl = load_model(
+            args.model_path, device=args.device, cache_dir=args.cache_dir, quantization_bits=args.quantization_bits,
+        )
+    else:
+        model_crawl = args.model_path
+        tokenizer_crawl = None
+    
     filter_models = load_filter_models(args.cache_dir, args.device)
 
     # Get crawler name

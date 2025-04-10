@@ -21,6 +21,8 @@ def load_model(model_name: str, cache_dir: str, device: str, quantization_bits: 
         device (str): Device to load the model on ('auto', 'cuda', 'cpu', etc.)
         cache_dir (str, optional): Directory to cache the downloaded model
     """
+    if any(model_name.startswith(prefix) for prefix in ["claude", "gpt"]):
+        return model_name, None
 
     # Load tokenizer and model
     tokenizer = AutoTokenizer.from_pretrained(

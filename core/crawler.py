@@ -3,7 +3,7 @@ import os
 import random
 from tqdm import trange, tqdm
 import json
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 from copy import copy
 
 from datetime import datetime
@@ -418,7 +418,7 @@ class Crawler:
 
     def check_refusal(
         self,
-        model: AutoModelForCausalLM,
+        model: Union[AutoModelForCausalLM, str],
         tokenizer: AutoTokenizer,
         selected_topics: List[Topic],
         user_message_templates: List[List[str]],
@@ -574,7 +574,7 @@ class Crawler:
 
     def crawl(
         self,
-        model: AutoModelForCausalLM,
+        model: Union[AutoModelForCausalLM, str],
         tokenizer: AutoTokenizer,
         filter_models: Dict,
         prompt_injection_location: str,

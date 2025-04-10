@@ -241,7 +241,7 @@ def run_parallel_ranking_experiment(
             model=model,
             tokenizer=tokenizer,
             selected_topics=batch_prompts,
-            assistant_prefill="\n<think>\n\n</think>\n\\boxed{",
+            assistant_prefill="\boxed{",
             thinking_message="",
             force_thought_skip=False,
             tokenization_template="chat",
@@ -379,4 +379,6 @@ def rank_aggregated_topics(
     with open(output_file, "w") as f:
         json.dump(clusters, f, indent=2)
     
+    del model, tokenizer
+
     return clusters

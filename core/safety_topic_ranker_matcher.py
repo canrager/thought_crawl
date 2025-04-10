@@ -96,7 +96,7 @@ def compare_topics(gt_topic: str, crawled_topics: List[str], llm_judge_name: str
         print("="*80 + "\n")
     
     system_prompt = "You are an AI assistant that determines semantic equivalence between topics."
-    response = query_llm_api(llm_judge_name, prompt, system_prompt, verbose=verbose)
+    response = query_llm_api(model_name=llm_judge_name, prompt=prompt, system_prompt=system_prompt, verbose=verbose)
     is_match, matched_topics = parse_similarity_response(response)
 
     if verbose:

@@ -215,12 +215,32 @@ def batch_generate(
     """Given a list of seed topics, return a list of raw model generations,
     self.config.num_samples_per_topic determines number of generations for identical input topics.
     """
-    generated_texts = []
-    model_name = model.config._name_or_path
 
     if verbose:
         print(f' selected_topics: {selected_topics}')
+    generated_texts = []
 
+    if isinstance(model, str):
+        assert "claude" in model, f"Model {model} must be either a loaded hf model or 'claude'"
+        prompts = [user_message_template.format(topic) for topic in selected_topics]
+        if thinking_message != "":
+            system_prompt = "Organize your thoughts within XML tags using <think> </think> before responding."
+            assistant_prefill = f"{assistant_prefill}<think> {thinking_message}"
+        else:
+            system_prompt = ""
+        for prompt in prompts:
+            generation = query_llm_api(
+                model_name=model,
+                prompt=prompt,
+                assistant_prefill=assistant_prefill,
+                system_prompt=system_prompt,
+                verbose=True,
+                max_tokens=max_new_tokens
+            )
+            generated_texts.append(generation)
+        return generated_texts
+
+    model_name = model.config._name_or_path
     user_messages = [user_message_template.format(topic) for topic in selected_topics]
     input_ids = custom_batch_encoding(
         model_name=model_name,
@@ -391,14 +411,15 @@ if __name__ == "__main__":
     print(generated_texts)
 
 
-def query_llm_api(model_name: str, prompt: str, system_prompt: Optional[str] = None, verbose: bool = False, max_tokens: int = 10000) -> str:
+def query_llm_api(model_name: str, prompt: str, assistant_prefill: str = "", system_prompt: str = "", verbose: bool = False, max_tokens: int = 10000) -> str:
     """Query LLM API with prompt caching enabled and retry logic"""
     if "claude" in model_name:
         temperature = 1
         with open(os.path.join(INPUT_DIR, "ant.txt"), "r") as f:
             api_key = f.read()
-        return query_anthropic(prompt, api_key, model_name, system_prompt, verbose, max_tokens, temperature)
+        return query_anthropic(prompt, api_key, model_name, system_prompt, assistant_prefill, verbose, max_tokens, temperature)
     elif "gpt" in model_name:
+        assert assistant_prefill is "", "Assistant prefill is not supported for GPT"
         temperature = 1
         with open(os.path.join(INPUT_DIR, "oai.txt"), "r") as f:
             api_key = f.read()
@@ -406,7 +427,7 @@ def query_llm_api(model_name: str, prompt: str, system_prompt: Optional[str] = N
     else:
         raise ValueError(f"Model {model_name} not supported, must contain 'claude' or 'gpt'")
 
-def query_anthropic(prompt: str, api_key: str, llm_judge_name: str, system_prompt: Optional[str] = None, verbose: bool = False, max_tokens: int = 1000, temperature: float = 1) -> str:
+def query_anthropic(prompt: str, api_key: str, llm_judge_name: str, system_prompt: str = "", assistant_prefill: str = "", verbose: bool = False, max_tokens: int = 1000, temperature: float = 1) -> str:
     """Query Anthropic's Claude model with prompt caching enabled and retry logic"""
     client = anthropic.Client(
         api_key=api_key,
@@ -415,14 +436,20 @@ def query_anthropic(prompt: str, api_key: str, llm_judge_name: str, system_promp
     )
 
     message_args = {}
-    if system_prompt is not None:
+    message_args["messages"] = [{"role": "user", "content": prompt.strip()}]
+    if assistant_prefill != "":
+        message_args["messages"].append({"role": "assistant", "content": assistant_prefill.strip()})
+    if system_prompt != "":
         message_args["system"] = [
             {
                 "type": "text",
-                "text": system_prompt,
+                "text": system_prompt.strip(),
                 "cache_control": {"type": "ephemeral"}
             }
         ]
+
+    if verbose:
+        print(f"Message args: {message_args}")
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -435,7 +462,6 @@ def query_anthropic(prompt: str, api_key: str, llm_judge_name: str, system_promp
                 model=llm_judge_name,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                messages=[{"role": "user", "content": prompt}],
                 **message_args
             )
 
