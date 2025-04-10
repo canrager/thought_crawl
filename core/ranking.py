@@ -241,7 +241,7 @@ def run_parallel_ranking_experiment(
             model=model,
             tokenizer=tokenizer,
             selected_topics=batch_prompts,
-            assistant_prefill="\boxed{",
+            assistant_prefill=r"\boxed{",
             thinking_message="",
             force_thought_skip=False,
             tokenization_template="chat",

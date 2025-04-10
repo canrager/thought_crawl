@@ -13,6 +13,7 @@ from core.analysis_utils import (
     plot_precision_recall_curve,
     format_topic_df_to_longtable,
     plot_first_occurrence_ids_across_runs,
+    plot_ROC_curve,
     CrawlName
 )
 from core.ranking import rank_aggregated_topics
@@ -269,22 +270,30 @@ if __name__ == "__main__":
             plot_label="Perplexity-70B",
             model_name="perplexity-ai/r1-1776-distill-llama-70b"
         ),
-        # CrawlName(
-        #     title="0328-tulu-8b-usersuffix-q0",
-        #     path="crawler_log_20250327_122827_Llama-3.1-Tulu-3-8B-SFT_1samples_100crawls_Truefilter_user_suffixprompt_q0.json",
-        #     acronym="U",
-        #     plot_label="User-Suffix",
-        #     model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
-        # ),
-        # CrawlName(
-        #     title="0328-tulu-8b-assistant-prefix-q0",
-        #     path="crawler_log_20250327_122827_Llama-3.1-Tulu-3-8B-SFT_1samples_100crawls_Truefilter_assistant_prefixprompt_q0.json",
-        #     acronym="A",
-        #     plot_label="Assistant-Prefix",
-        #     model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
-        # )
+        CrawlName(
+            title="0328-tulu-8b-direct-prompting-q0",
+            path="crawler_log_20250327_122827_Llama-3.1-Tulu-3-8B-SFT_1samples_100crawls_Truefilter_user_allprompt_q0.json",
+            acronym="D",
+            plot_label="Direct-Prompting",
+            model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
+        ),
+        CrawlName(
+            title="0328-tulu-8b-usersuffix-q0",
+            path="crawler_log_20250327_122827_Llama-3.1-Tulu-3-8B-SFT_1samples_100crawls_Truefilter_user_suffixprompt_q0.json",
+            acronym="U",
+            plot_label="User-Suffix",
+            model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
+        ),
+        CrawlName(
+            title="0328-tulu-8b-assistant-prefix-q0",
+            path="crawler_log_20250327_122827_Llama-3.1-Tulu-3-8B-SFT_1samples_100crawls_Truefilter_assistant_prefixprompt_q0.json",
+            acronym="A",
+            plot_label="Assistant-Prefix",
+            model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
+        ),
     ]
     all_crawl_names_dict = {name.title: name for name in all_crawl_names}
+
 
     parser = argparse.ArgumentParser(description="Evaluate crawler results.")
     parser.add_argument("--crawl_titles", nargs='+', default=None, help="Subset of crawl titles to evaluate. If None, evaluates all defined crawls.")
@@ -299,13 +308,24 @@ if __name__ == "__main__":
 
     #########################################
     # Manual arg override
-    args.analysis_mode = "across_runs_only"
+    args.analysis_mode = "rank_only"
+    args.force_recompute = False
+    args.debug = False
     args.crawl_titles = [
         # "0329-perplexity-70b-thought-prefix-q8", 
         # "0329-meta-70b-assistant-prefix-q8",
-        "0329-deepseek-70b-thought-prefix-q8",
-        "0407-claude-haiku-thought-prefix"
+        # "0329-deepseek-70b-thought-prefix-q8",
+        # "0407-claude-haiku-thought-prefix",
+
+        "0328-tulu-8b-direct-prompting-q0",
+        "0328-tulu-8b-usersuffix-q0",
+        "0328-tulu-8b-assistant-prefix-q0",
     ]
+
+    gt_fnames = {
+        "Tulu Safety": "tulu3_ground_truth_safety_topics",
+        # "CCP censorship": "censorship_topics"
+    }
     #########################################
 
 
@@ -338,10 +358,6 @@ if __name__ == "__main__":
     print(f"LLM Judge: {llm_judge_name}")
 
 
-    gt_fnames = {
-        "Tulu Safety": "tulu3_ground_truth_safety_topics",
-        "CCP censorship": "censorship_topics"
-    }
 
     for names in selected_crawl_names:
         print(f"===== Processing: {names.title} =====")
@@ -367,6 +383,8 @@ if __name__ == "__main__":
              ## Self-Ranking
             print("Running self-ranking...")
             rank_aggregated_topics(names.title, names.model_name, device=DEVICE, cache_dir=CACHE_DIR, force_recompute=force_recompute, debug=debug) # cluster_title -> {ranking_method: {cluster_id: {rank_ordinal, rank_score, num_comparisons, cluster_title}}}
+        
+        if analysis_mode in ['full', 'rank_only', "wordcloud_only"]:
             print("Generating wordcloud...")
             generate_wordcloud_from_ranking(run_title=names.title, colormap="winter")
 
@@ -395,6 +413,10 @@ if __name__ == "__main__":
     if analysis_mode in ['full', 'across_runs_only', 'convergence_across_runs_only']:
         print("Plotting joint convergence...")
         plot_first_occurrence_ids_across_runs(selected_crawl_names, RESULT_DIR)
+
+    if analysis_mode in ['full', 'across_runs_only', 'ROC_across_runs_only']:
+        print("Plotting ROC curve...")
+        plot_ROC_curve(selected_crawl_names, RESULT_DIR)
 
     print("===== Analysis complete =====")
             

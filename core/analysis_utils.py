@@ -195,6 +195,8 @@ def plot_first_occurrence_ids_across_runs(crawl_names: List[CrawlName], result_d
     # Prepare data for the plotting function: List of (run_title, plot_name)
     crawl_info = [(cn.title, cn.plot_label) for cn in crawl_names]
     import matplotlib.pyplot as plt
+    # Set font properties
+    plt.rcParams.update({'font.size': 14, 'font.family': 'Palatino'})
     # numpy is imported above or assumed to be available
     
     plt.figure(figsize=(6, 4))
@@ -291,6 +293,9 @@ def plot_precision_recall_curve(
     Returns:
         Tuple of (precisions, recalls) arrays
     """
+    # Set font properties
+    plt.rcParams.update({'font.size': 14, 'font.family': 'Palatino'})
+
     # Load rankings with safety topic matches
     clusters_file = os.path.join(RESULT_DIR, f"topics_clustered_ranked_matched_{run_title}.json")
     if not os.path.exists(clusters_file):
@@ -340,6 +345,70 @@ def plot_precision_recall_curve(
         plt.show()
     
     return precisions, recalls
+
+def plot_ROC_curve(
+    run_titles: List[str],
+    save_fig: bool = True
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Plot precision-recall curve using safety topic matching results.
+    
+    Args:
+        run_title: Title of the run for plot filename
+        save_fig: Whether to save the figure
+        
+    Returns:
+        Tuple of (precisions, recalls) arrays
+    """
+    # Set font properties
+    plt.rcParams.update({'font.size': 14, 'font.family': 'Palatino'})
+
+    # Load rankings with safety topic matches
+    match_counts = {}
+    no_match_counts = {}
+    for run_title in run_titles:
+        clusters_file = os.path.join(RESULT_DIR, f"topics_clustered_ranked_matched_{run_title}.json")
+        if not os.path.exists(clusters_file):
+            raise FileNotFoundError(f"Error: {clusters_file} does not exist")
+        with open(clusters_file, "r") as f:
+            clusters = json.load(f)
+
+        # Get the number of topics from rankings
+        num_clusters = len(clusters)
+        ranked_topics = sorted(clusters.keys(), key=lambda x: clusters[x]["ranking"]["elo"]["rank_idx"])
+        is_matched = [clusters[t]["is_match"] for t in ranked_topics]
+        
+        # Calculate precision and recall for each k
+        true_positives = 0
+        false_positives = 0
+        match_counts[run_title] = np.zeros(num_clusters)
+        no_match_counts[run_title] = np.zeros(num_clusters)
+        for k in range(num_clusters):
+            if is_matched[k]:
+                true_positives += 1
+            else:
+                false_positives += 1
+            match_counts[run_title][k] = true_positives / num_clusters
+            no_match_counts[run_title][k] = false_positives / num_clusters
+    
+    # Create the plot
+    plt.figure(figsize=(4, 4))
+    for run_title in run_titles:
+        plt.plot(range(num_clusters), no_match_counts[run_title], label=run_title, color="red")
+    plt.xlabel("True Positive Rate")
+    plt.ylabel("False Positive Rate")
+    plt.ylim(0, 1)
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.legend(loc="upper right")
+    
+    if save_fig:
+        output_file = os.path.join(RESULT_DIR, f"ROC_curve_{run_title}.png")
+        plt.savefig(output_file)
+        plt.close()
+        print(f"ROC curve saved to {output_file}")
+    else:
+        plt.show()
+    
+    return match_counts, no_match_counts
 
 def format_topic_df_to_longtable(df: pd.DataFrame) -> Tuple[str, str]:
     """Format a topic DataFrame into LaTeX longtable code and save to file.

@@ -47,8 +47,8 @@ def generate_wordcloud_from_ranking(
     result_dir: str = RESULT_DIR,
     method: str = "elo",
     width: int = 1600,
-    height: int = 800,
-    background_color: str = "white",
+    height: int = 1000,
+    background_color: str = "rgba(255, 255, 255, 0)",
     colormap: str = "winter",
     min_font_size: int = 10,
     max_font_size: int = 120,
@@ -63,7 +63,7 @@ def generate_wordcloud_from_ranking(
         method: Ranking method to use (default: "elo")
         width: Width of the word cloud image
         height: Height of the word cloud image
-        background_color: Background color of the word cloud
+        background_color: Background color of the word cloud (default: transparent)
         colormap: Matplotlib colormap to use for words
         min_font_size: Minimum font size for words
         max_font_size: Maximum font size for words
@@ -111,6 +111,7 @@ def generate_wordcloud_from_ranking(
         relative_scaling=relative_scaling,
         normalize_plurals=False,
         mask=mask,
+        mode="RGBA",
         color_func=lambda word, font_size, position, orientation, random_state=None, **kwargs: color_func(
             word, font_size, position, orientation, random_state, 
             word_scores=word_scores, colormap=cmap
