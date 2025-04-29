@@ -129,6 +129,19 @@ def load_zh_en_translation_model(cache_dir: str, device: str):
     )
     return model_zh_en, tokenizer_zh_en
 
+def load_en_zh_translation_model(cache_dir: str, device: str):
+    # Translation LM
+    tokenizer_en_zh = AutoTokenizer.from_pretrained(
+        "Helsinki-NLP/opus-mt-en-zh", 
+        cache_dir=cache_dir
+    )
+    model_en_zh = AutoModelForSeq2SeqLM.from_pretrained(
+        "Helsinki-NLP/opus-mt-en-zh", 
+        cache_dir=cache_dir, 
+        device_map=device
+    )
+    return model_en_zh, tokenizer_en_zh
+
 def load_embedding_model(cache_dir: str, device: str):
     tokenizer_emb = AutoTokenizer.from_pretrained(
         "intfloat/multilingual-e5-large-instruct", 
@@ -149,6 +162,7 @@ def load_filter_models(cache_dir: Optional[str] = None, device: str = "auto"):
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model_zh_en, tokenizer_zh_en = load_zh_en_translation_model(cache_dir, device)
+    model_en_zh, tokenizer_en_zh = load_en_zh_translation_model(cache_dir, device)
     model_emb, tokenizer_emb = load_embedding_model(cache_dir, device)
     
     # Load OpenAI client for embeddings
@@ -176,6 +190,8 @@ def load_filter_models(cache_dir: Optional[str] = None, device: str = "auto"):
     return {
         "tokenizer_zh_en": tokenizer_zh_en,
         "model_zh_en": model_zh_en,
+        "tokenizer_en_zh": tokenizer_en_zh,
+        "model_en_zh": model_en_zh,
         "tokenizer_emb": tokenizer_emb,
         "model_emb": model_emb,
         "model_spacy_en": model_spacy_en,

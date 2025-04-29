@@ -10,9 +10,9 @@ from core.generation_utils import compute_embeddings
 
 @dataclass
 class Topic:
-    text: str = None
     raw: str = None
-    translation: str = None
+    english: str = None
+    chinese: str = None
     id: int = None
     parent_id: int = None
     is_chinese: bool = None
@@ -25,13 +25,16 @@ class Topic:
     def to_dict(self):
         return {
             "id": self.id,
-            "text": self.text,
             "raw": self.raw,
-            "translation": self.translation,
+            "english": self.english,
+            "chinese": self.chinese,
+            "is_chinese": self.is_chinese,
             "is_head": self.is_head,
             "is_refusal": self.is_refusal,
-            "is_chinese": self.is_chinese,
             "cossim_to_head": self.cossim_to_head,
+            "cluster_idx": self.cluster_idx,
+            "parent_id": self.parent_id,
+            "responses": self.responses,
             "cluster_idx": self.cluster_idx,
             "parent_id": self.parent_id,
             "responses": self.responses,
@@ -160,14 +163,14 @@ class TopicQueue:
             head = self.head_topics[i]
             string += f"\nCluster {i}:\n"
             string += (
-                f"  Head: text='{head.text}', raw='{head.raw}', translation='{head.translation}'\n"
+                f"  Head: text='{head.english}', raw='{head.raw}'\n"
             )
 
             # Cluster topics
             string += "  Topics:\n"
             for topic in self.cluster_topics[i]:
                 if not topic.is_head:  # Skip head topic since we already showed it
-                    string += f"    text='{topic.text}', raw='{topic.raw}', translation='{topic.translation}'\n"
+                    string += f"    text='{topic.english}', raw='{topic.raw}'\n"
                     string += f"    cossim_to_head: {topic.cossim_to_head}\n"
 
         return string

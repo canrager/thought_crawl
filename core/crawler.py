@@ -158,20 +158,26 @@ class Crawler:
         """Check if the text contains Chinese characters."""
         return bool(self.chinese_pattern.search(text))
 
-    def _translate_chinese_english(
+    def _translate_chinese_english_both_ways    (
         self,
         model_zh_en: AutoModelForSeq2SeqLM,
         tokenizer_zh_en: AutoTokenizer,
+        model_en_zh: AutoModelForSeq2SeqLM,
+        tokenizer_en_zh: AutoTokenizer,
         topics: List[Topic],
     ) -> List[Topic]:
         """Given a list of texts, translate the texts with chinese characters to english. Do not translate others.
         Changes the order of topics in the batch to [english] + [chinese]"""
         # check for chinese characters
         chinese_topics, topic_indices = [], []
+        english_topics, topic_indices = [], []
         for i, topic in enumerate(topics):
             topic.is_chinese = self._has_chinese(topic.raw)
             if topic.is_chinese:
                 chinese_topics.append(topic)
+                topic_indices.append(i)
+            else:
+                english_topics.append(topic)
                 topic_indices.append(i)
 
         # translate the subset with chinese characters in a single batch
@@ -188,9 +194,26 @@ class Crawler:
             translated_str_B = tokenizer_zh_en.batch_decode(
                 translated_ids_B, skip_special_tokens=True
             )
-            for translation, idx in zip(translated_str_B, topic_indices_B):
-                topics[idx].translation = translation
-                topics[idx].text = translation  # Override text with translation
+            for original, translation, idx in zip(chinese_raw_B, translated_str_B, topic_indices_B):
+                topics[idx].english = translation
+                topics[idx].chinese = original
+
+        for batch_start in range(0, len(english_topics), self.config.generation_batch_size):
+            batch_end = batch_start + self.config.generation_batch_size
+            english_topic_B = english_topics[batch_start:batch_end]
+            topic_indices_B = topic_indices[batch_start:batch_end]
+            english_raw_B = [t.raw for t in english_topic_B]
+            en_zh_ids_B = tokenizer_en_zh(
+                english_raw_B, padding=True, truncation=True, return_tensors="pt"
+            ).to(model_en_zh.device)
+            with torch.inference_mode():
+                translated_ids_B = model_en_zh.generate(**en_zh_ids_B, max_new_tokens=30)
+            translated_str_B = tokenizer_en_zh.batch_decode(
+                translated_ids_B, skip_special_tokens=True
+            )
+            for original, translation, idx in zip(english_raw_B, translated_str_B, topic_indices_B):
+                topics[idx].english = original
+                topics[idx].chinese = translation
 
         return topics
 
@@ -201,29 +224,29 @@ class Crawler:
             batch_topics = topics[batch_start:batch_end]
 
             # Process batch of texts together
-            docs = model_spacy_en.pipe([topic.text for topic in batch_topics])
+            docs = model_spacy_en.pipe([topic.english for topic in batch_topics])
 
             # Update each topic's text with filtered tokens
             for topic, doc in zip(batch_topics, docs):
                 meaningful_tokens = [
-                    token.text
+                    token.english
                     for token in doc
                     if token.tag_[:2] in set(self.config.allowed_spacy_tags)
                 ]
-                topic.text = " ".join(meaningful_tokens)
+                topic.english = " ".join(meaningful_tokens)
 
         return topics
 
     def _regex_filter(self, topics: List[Topic]) -> List[Topic]:
         for topic in topics:
-            item = topic.text
+            item = topic.english
             item = item.lower()
             item = item.strip(" ./:\",'()[]")
             item = item.replace(".", "")  # remove dots
             item = " ".join(
                 word for word in item.split() if len(word) > 1
             )  # remove single characters
-            topic.text = item
+            topic.english = item
         return topics
 
     def _remove_words(self, topics: List[Topic]) -> List[Topic]:
@@ -240,14 +263,14 @@ class Crawler:
             return []
 
         for topic in topics:
-            if not topic.text:
+            if not topic.english:
                 continue
 
             # duplicate removal
             words = list(
                 dict.fromkeys(
                     word
-                    for word in topic.text.split()
+                    for word in topic.english.split()
                     if word not in set(self.config.regex_filter_global)
                 )
             )
@@ -258,17 +281,17 @@ class Crawler:
             while words and words[-1] in set(self.config.regex_filter_start_end_only):
                 words.pop()
 
-            topic.text = " ".join(words)
+            topic.english = " ".join(words)
         return topics
 
     def _split_at_comma(self, topics: List[Topic]) -> List[Topic]:
         for topic in topics:
-            if "," in topic.text:
-                splitted_text = topic.text.split(",")
-                topic.text = splitted_text[0]
+            if "," in topic.english:
+                splitted_text = topic.english.split(",")
+                topic.english = splitted_text[0]
                 for item in splitted_text[1:]:
                     topics.append(
-                        Topic(text=item, raw=topic.raw, translation=topic.translation)
+                        Topic(raw=topic.raw, chinese=topic.chinese, english=topic.english)
                     )
         return topics
 
@@ -276,6 +299,8 @@ class Crawler:
         self,
         model_zh_en: AutoModelForSeq2SeqLM,
         tokenizer_zh_en: AutoTokenizer,
+        model_en_zh: AutoModelForSeq2SeqLM,
+        tokenizer_en_zh: AutoTokenizer,
         model_spacy_en: Language,
         generations: List[str],
         parent_ids: List[int],
@@ -316,7 +341,7 @@ class Crawler:
         if formatted_topics == []:
             return formatted_topics
 
-        formatted_text = [t.text for t in formatted_topics]
+        formatted_text = [t.english for t in formatted_topics]
 
         with torch.inference_mode(), torch.no_grad():
             batch_embeddings_BD = compute_embeddings(tokenizer_emb, model_emb, formatted_text)
@@ -339,7 +364,7 @@ class Crawler:
             new_head_topics = [t for t in formatted_topics if t.is_head]
             print(f"new head topics:\n")
             for t in new_head_topics:
-                print(f"{t.text}\n{t.raw}\n{t.translation}\n\n")
+                print(f"{t.english}\n{t.raw}\n\n")
         return formatted_topics
 
     def deduplicate_oai(
@@ -371,7 +396,7 @@ class Crawler:
         if formatted_topics == []:
             return formatted_topics
 
-        formatted_text = [t.text for t in formatted_topics]
+        formatted_text = [t.english for t in formatted_topics]
 
         # Compute embeddings using OpenAI API
         batch_embeddings_BD = batch_compute_openai_embeddings(openai_client, openai_emb_model_name, formatted_text)
@@ -395,7 +420,7 @@ class Crawler:
             new_head_topics = [t for t in formatted_topics if t.is_head]
             print(f"new head topics (OpenAI):\n")
             for t in new_head_topics:
-                print(f"{t.text}\n{t.raw}\n{t.translation}\n\n")
+                print(f"{t.english}\n{t.raw}\n\n")
         
         return formatted_topics
 
@@ -529,7 +554,7 @@ class Crawler:
         if verbose:
             for topic in topics:
                 print(
-                    f"new topic from initial topics:\n{topic.text}\n{topic.raw}\n{topic.translation}\nID:{topic.id}\nis_refusal:{topic.is_refusal}\n\n"
+                    f"new topic from initial topics:\n{topic.english}\n{topic.raw}\nID:{topic.id}\nis_refusal:{topic.is_refusal}\n\n"
                 )
         return topics
 
@@ -548,7 +573,7 @@ class Crawler:
             batch_topics = self.queue.head_topics[batch_start:batch_end]
            
             batch_embeddings = compute_embeddings(
-                tokenizer_emb, model_emb, [t.text for t in batch_topics]
+                tokenizer_emb, model_emb, [t.english for t in batch_topics]
             )
             self.head_embedding_CD = torch.cat((self.head_embedding_CD, batch_embeddings), dim=0)
 
@@ -567,7 +592,7 @@ class Crawler:
             batch_embeddings = batch_compute_openai_embeddings(
                 openai_client=openai_client,
                 openai_emb_model_name=openai_emb_model_name,
-                words=[t.text for t in batch_topics]
+                words=[t.english for t in batch_topics]
             )
             batch_embeddings = batch_embeddings.to(self.config.device)
             self.head_embedding_CD = torch.cat((self.head_embedding_CD, batch_embeddings), dim=0)
@@ -697,6 +722,8 @@ class Crawler:
                         new_topics = self.extract_and_format(
                             model_zh_en=filter_models["model_zh_en"],
                             tokenizer_zh_en=filter_models["tokenizer_zh_en"],
+                            model_en_zh=filter_models["model_en_zh"],
+                            tokenizer_en_zh=filter_models["tokenizer_en_zh"],
                             model_spacy_en=filter_models["model_spacy_en"],
                             generations=generated_texts,
                             parent_ids=parent_ids,
@@ -736,7 +763,7 @@ class Crawler:
                         if verbose:
                             for topic in new_topics:
                                 print(
-                                    f"new topic from crawl step {crawl_step_idx}:\n{topic.text}\n{topic.raw}\n{topic.translation}\n\n"
+                                    f"new topic from crawl step {crawl_step_idx}:\n{topic.english}\n{topic.raw}\n\n"
                                 )
                                 # Record memory usage
 
