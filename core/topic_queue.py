@@ -13,6 +13,7 @@ class Topic:
     raw: str = None
     english: str = None
     chinese: str = None
+    shortened: str = None
     id: int = None
     parent_id: int = None
     is_chinese: bool = None
@@ -28,6 +29,7 @@ class Topic:
             "raw": self.raw,
             "english": self.english,
             "chinese": self.chinese,
+            "shortened": self.shortened,
             "is_chinese": self.is_chinese,
             "is_head": self.is_head,
             "is_refusal": self.is_refusal,

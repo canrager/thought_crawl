@@ -40,12 +40,10 @@ def get_head_topic_dict(key: str, crawl_data: dict, include_raw: bool = False) -
     """Get head topics from crawl data"""
     head_topics_engl_list = {}
     for t in crawl_data["queue"]["topics"][key]:
-        topic_str = t["raw"]
-        if t["translation"] is not None:
+        topic_str = t["english"]
+        if t["is_chinese"]:
             if include_raw:
-                topic_str = f"{t['raw']} ({t['translation']})"
-            else:
-                topic_str = t["translation"]
+                topic_str = f"{t['chinese']} ({t['english']})"
         head_topics_engl_list[topic_str] = [str(t["id"])]
     return head_topics_engl_list
 
@@ -348,9 +346,12 @@ def plot_precision_recall_curve(
 
 def plot_ROC_curve(
     run_titles: List[str],
-    save_fig: bool = True
+    save_fig: bool = True,
+    ranking_mode: str = "clustered"
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Plot precision-recall curve using safety topic matching results.
+    Take ranked topics. Label as matching any safety topic, plot ROC curve: x=FPR, y=TPR
+    First in clusters. #TODO individually, not clustered.
     
     Args:
         run_title: Title of the run for plot filename
@@ -363,10 +364,16 @@ def plot_ROC_curve(
     plt.rcParams.update({'font.size': 14, 'font.family': 'Palatino'})
 
     # Load rankings with safety topic matches
-    match_counts = {}
-    no_match_counts = {}
+    match_rates = {}
+    no_match_rates = {}
     for run_title in run_titles:
-        clusters_file = os.path.join(RESULT_DIR, f"topics_clustered_ranked_matched_{run_title}.json")
+        run_title = run_title.title
+        if ranking_mode == "clustered":
+            clusters_file = os.path.join(RESULT_DIR, f"topics_clustered_ranked_matched_{run_title}.json")
+        elif ranking_mode == "individual":
+            clusters_file = os.path.join(RESULT_DIR, f"topics_ranked_matched_{run_title}.json")
+        else:
+            raise ValueError(f"Invalid ranking mode: {ranking_mode}")
         if not os.path.exists(clusters_file):
             raise FileNotFoundError(f"Error: {clusters_file} does not exist")
         with open(clusters_file, "r") as f:
@@ -376,39 +383,51 @@ def plot_ROC_curve(
         num_clusters = len(clusters)
         ranked_topics = sorted(clusters.keys(), key=lambda x: clusters[x]["ranking"]["elo"]["rank_idx"])
         is_matched = [clusters[t]["is_match"] for t in ranked_topics]
+
+        print(f'{num_clusters} ranked topics')
+        print(ranked_topics)
+        print(is_matched)
         
         # Calculate precision and recall for each k
         true_positives = 0
         false_positives = 0
-        match_counts[run_title] = np.zeros(num_clusters)
-        no_match_counts[run_title] = np.zeros(num_clusters)
+        match_rates[run_title] = np.zeros(num_clusters)
+        no_match_rates[run_title] = np.zeros(num_clusters)
         for k in range(num_clusters):
             if is_matched[k]:
                 true_positives += 1
             else:
                 false_positives += 1
-            match_counts[run_title][k] = true_positives / num_clusters
-            no_match_counts[run_title][k] = false_positives / num_clusters
+            match_rates[run_title][k] = true_positives
+            no_match_rates[run_title][k] = false_positives
+
+        total_true_positives = true_positives
+        total_false_positives = false_positives
+
+        match_rates[run_title] /= total_true_positives
+        no_match_rates[run_title] /= total_false_positives
     
     # Create the plot
-    plt.figure(figsize=(4, 4))
+    plt.figure(figsize=(6, 6))
     for run_title in run_titles:
-        plt.plot(range(num_clusters), no_match_counts[run_title], label=run_title, color="red")
-    plt.xlabel("True Positive Rate")
-    plt.ylabel("False Positive Rate")
-    plt.ylim(0, 1)
+        run_title = run_title.title
+        plt.plot(no_match_rates[run_title], match_rates[run_title], label=run_title, color="red")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.ylim(-0.01, 1.01)
     plt.grid(True, linestyle="--", alpha=0.7)
     plt.legend(loc="upper right")
     
+    run_titles_str = "_".join([rt.title for rt in run_titles])
     if save_fig:
-        output_file = os.path.join(RESULT_DIR, f"ROC_curve_{run_title}.png")
+        output_file = os.path.join(RESULT_DIR, f"ROC_curve_{run_titles_str}.png")
         plt.savefig(output_file)
         plt.close()
         print(f"ROC curve saved to {output_file}")
     else:
         plt.show()
     
-    return match_counts, no_match_counts
+    return match_rates, no_match_rates
 
 def format_topic_df_to_longtable(df: pd.DataFrame) -> Tuple[str, str]:
     """Format a topic DataFrame into LaTeX longtable code and save to file.
@@ -572,3 +591,282 @@ def format_topic_df_to_longtable(df: pd.DataFrame) -> Tuple[str, str]:
         print("Note: Document not saved to file. RESULT_DIR not defined or invalid.")
     
     return packages, latex_document
+
+def format_topic_df_to_shorttable(df: pd.DataFrame) -> Tuple[str, str]:
+    """Format a topic DataFrame into a summarized LaTeX table showing category completion rates.
+    
+    Args:
+        df: DataFrame with columns:
+            - category: Topic category
+            - dataset: Source dataset
+            - topic: Topic name
+            - One column per crawl plot label containing counts
+            
+    Returns:
+        Tuple of (required_packages, latex_document) where:
+            - required_packages: LaTeX packages needed for the table (for reference)
+            - latex_document: Complete, renderable LaTeX document
+    """
+    # Get crawl columns (all columns except category, dataset, and topic)
+    crawl_columns = [col for col in df.columns if col not in ['category', 'dataset', 'topic']]
+    
+    # Build the table content
+    table_content = ""
+    
+    # Group by category and dataset
+    grouped = df.groupby(['category', 'dataset'])
+    
+    for (category, dataset), group in grouped:
+        # Add category row
+        # table_content += f"{category} ({dataset})"
+        table_content += f"{dataset}"
+        
+        # Calculate completion rates for each crawl
+        for col in crawl_columns:
+            total_topics = len(group)
+            completed_topics = sum(group[col] > 0)
+            completion_rate = completed_topics / total_topics if total_topics > 0 else 0
+            
+            # Determine cell color based on completion rate
+            if completion_rate == 1.0:
+                cell_color = "green!25"
+            elif completion_rate == 0.0:
+                cell_color = "red!25"
+            else:
+                cell_color = "blue!25"
+            
+            # Add the fraction with colored background
+            table_content += f" & \\cellcolor{{{cell_color}}}\\textcolor{{black}}{{{completed_topics}/{total_topics}}}"
+        
+        table_content += " \\\\\n"
+        # table_content += "\\midrule\n"
+    
+    # Create the complete LaTeX document
+    latex_document = """\\documentclass{article}
+\\usepackage{longtable}
+\\usepackage{booktabs}
+\\usepackage{colortbl}
+\\usepackage{xcolor}
+\\usepackage{rotating}
+\\usepackage{array}
+\\usepackage{graphicx}
+
+% Define extremely compact column spacing
+\\setlength{\\tabcolsep}{0pt}
+
+% Custom command for overlapping rotated column headers
+\\newcommand{\\tightHeader}[3]{%
+    \\multicolumn{1}{c}{\\makebox[#1pt][l]{%
+        \\rotatebox[origin=bl]{45}{\\hspace{#2pt}\\raisebox{3pt}{#3}}%
+    }}%
+}
+
+\\begin{document}
+\\title{Topic Category Completion Rates}
+\\author{Generated Table}
+\\maketitle
+
+\\begin{longtable}{l"""
+
+    # Add very narrow columns with minimal spacing
+    for i in range(len(crawl_columns)):
+        latex_document += "@{\\hspace{3pt}}c"  # Increased from 5pt to 8pt
+    latex_document += "}\n"
+    
+    # Caption and label
+    latex_document += "\\caption{Topic category completion rates across different crawls}\\label{table:topic-completion}\\\\\n"
+    
+    # Table header for first page
+    latex_document += "\\toprule\n"
+    
+    # Generate the header commands only once
+    header_commands = []
+    for i, label in enumerate(crawl_columns):
+        # Different makebox width and horizontal shift based on column position
+        width = "28" if i == 0 else f"{28 - (i * 3)}"  # First column needs less width
+        hshift = "0" #if i == 0 else f"{i * 5}"  # Progressively shift columns to the right
+        header_commands.append(f"\\tightHeader{{{width}}}{{{hshift}}}{{{label}}}")
+
+    rotated_headers = " & ".join(header_commands)
+
+    # First page header
+    latex_document += "& " + rotated_headers + " \\\\\n"
+    latex_document += "\\toprule\n"
+    latex_document += "\\endfirsthead\n\n"
+
+    # # Continuation header for subsequent pages - reuse the same rotated headers
+    # latex_document += "\\multicolumn{" + str(len(crawl_columns) + 1) + "}{c}{\\tablename\\ \\thetable\\ -- \\textit{Continued from previous page}} \\\\\n"
+    # latex_document += "\\toprule\n"
+    # latex_document += "& " + rotated_headers + " \\\\\n"
+    # latex_document += "\\midrule\n"
+    # latex_document += "\\endhead\n\n"
+    
+    # # Footer for all but the last page
+    # latex_document += "\\midrule\n"
+    # latex_document += "\\multicolumn{" + str(len(crawl_columns) + 1) + "}{r}{\\textit{Continued on next page}} \\\\\n"
+    # latex_document += "\\endfoot\n\n"
+    
+    # Footer for the last page
+    latex_document += "\\bottomrule\n"
+    latex_document += "\\endlastfoot\n\n"
+    
+    # Add the table content
+    latex_document += table_content
+    
+    # Close the longtable and document
+    latex_document += "\\end{longtable}\n\\end{document}"
+    
+    # For backward compatibility, keep returning the packages info as well
+    packages = """% Required packages for the table
+\\usepackage{longtable}    % For tables that span multiple pages
+\\usepackage{booktabs}     % For nice-looking tables
+\\usepackage{colortbl}     % For cell coloring
+\\usepackage{xcolor}       % For text coloring
+\\usepackage{rotating}     % For rotating text (e.g., column headers)
+\\usepackage{array}        % For better column formatting
+\\usepackage{graphicx}     % For additional transformations
+
+% Define extremely compact column spacing
+\\setlength{\\tabcolsep}{0pt}  % No spacing at all, we control manually with @{} in table definition
+
+% Custom command for overlapping rotated column headers
+\\newcommand{\\tightHeader}[3]{%
+    \\multicolumn{1}{c}{\\makebox[#1pt][l]{%
+        \\rotatebox[origin=bl]{32}{\\hspace{#2pt}\\raisebox{3pt}{#3}}%
+    }}%
+}
+"""
+    
+    # Create unique filename based on content
+    from datetime import datetime
+    import os
+    
+    date_str = datetime.now().strftime("%Y%m%d")
+    crawls_str = "_".join([col.lower().replace(" ", "_") for col in crawl_columns])
+    filename = f"topic_completion_{crawls_str}_{date_str}.tex"
+    
+    # Save to file if RESULT_DIR is defined
+    try:
+        output_path = os.path.join(RESULT_DIR, filename)
+        with open(output_path, "w") as f:
+            f.write(latex_document)
+        print(f"Complete LaTeX document saved to {output_path}")
+    except (NameError, FileNotFoundError):
+        print("Note: Document not saved to file. RESULT_DIR not defined or invalid.")
+    
+    return packages, latex_document
+
+def generate_latex_match_table(df: pd.DataFrame, mode: str) -> Tuple[str, str]:
+    """Wrapper function to generate a LaTeX table showing the match between two columns of a DataFrame."""
+    if mode == "all_gt_topics":
+        return format_topic_df_to_longtable(df)
+    elif mode == "categories_only":
+        return format_topic_df_to_shorttable(df)
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
+
+def plot_recall_curves_across_files(label_to_file: Dict[str, str], result_dir: str, max_steps: int = 20000) -> None:
+    """
+    Creates a combined plot of recall curves across multiple files containing ground truth categories.
+    Each file is plotted in a different color on the same subplot.
+    
+    Args:
+        label_to_file: Dictionary mapping plot labels to file paths containing ground truth categories
+        result_dir: Directory to save the output plot
+        max_steps: Maximum number of topics to plot on x-axis
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from typing import Dict, List, Set
+    
+    # Set font properties
+    plt.rcParams.update({'font.size': 14, 'font.family': 'Palatino'})
+    
+    plt.figure(figsize=(6, 4))
+    
+    # Use a different color for each file
+    colors = plt.cm.tab10(np.linspace(0, 1, len(label_to_file)))
+    
+    # First pass: validate all files have same ground truth categories
+    gt_categories: Set[str] = set()
+    for label, file_path in label_to_file.items():
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                current_categories = set(data.keys())
+                
+                if not gt_categories:
+                    gt_categories = current_categories
+                elif gt_categories != current_categories:
+                    raise ValueError(f"File {file_path} has different ground truth categories than expected")
+                
+        except FileNotFoundError:
+            print(f"Warning: File not found: {file_path}")
+            continue
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode JSON from {file_path}")
+            continue
+    
+    if not gt_categories:
+        print("Error: No valid ground truth categories found in any file")
+        plt.close()
+        return
+    
+    num_gt_categories = len(gt_categories)
+    
+    # Second pass: plot recall curves
+    for (label, file_path), color in zip(label_to_file.items(), colors):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            
+            # Extract first occurrence IDs and filter out None values
+            first_occurrences = [fid for fid in data.values() if fid is not None]
+            first_occurrences.sort()
+            
+            if not first_occurrences:
+                print(f"Warning: No valid first occurrence IDs found in {file_path}")
+                continue
+            
+            # Calculate recall at each step
+            x_data = list(range(1, max_steps + 1))
+            y_data = []
+            
+            for step in x_data:
+                # Count how many categories were found by this step
+                found_categories = sum(1 for fid in first_occurrences if fid <= step)
+                recall = found_categories / num_gt_categories
+                y_data.append(recall)
+            
+            # Plot this file's data
+            plt.plot(x_data, y_data, label=label, color=color, alpha=0.8)
+            
+        except FileNotFoundError:
+            print(f"Warning: File not found: {file_path}")
+            continue
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode JSON from {file_path}")
+            continue
+    
+    plt.xlabel('Number of Topics')
+    plt.ylabel('Recall')
+    plt.ylim(-0.01, 1.01)  # Slightly extend y-axis for better visualization
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # Position legend below the plot, centered, with horizontal entries and no frame
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15),
+               ncol=len(label_to_file), frameon=False)
+    
+    # Adjust layout to prevent legend cutoff
+    plt.tight_layout()
+    
+    # Save the plot
+    date_str = datetime.now().strftime("%Y%m%d")
+    # Use only alphanumeric chars and underscores from labels for filename safety
+    safe_labels = ["".join(c for c in label if c.isalnum() or c == '_') for label in label_to_file.keys()]
+    labels_str = "--".join(safe_labels)
+    output_file = os.path.join(result_dir, f"recall_curves_comparison_{date_str}_{labels_str}.png")
+    plt.savefig(output_file, bbox_inches='tight', dpi=200)
+    plt.close()
+    
+    print(f"Recall curves comparison plot saved to {output_file}")

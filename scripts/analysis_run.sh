@@ -20,11 +20,7 @@ LOG_FILE="$PROJECT_ROOT/artifacts/log/analysis_${TIMESTAMP}.log"
 echo "Log Dir: $LOG_FILE"
 
 # Run the crawler script with nohup and write to the log file
-CUDA_VISIBLE_DEVICES=5,6,7 nohup python exp/evaluate_crawler.py \
-    --crawl_titles "0329-perplexity-70b-thought-prefix-q8" "0329-meta-70b-assistant-prefix-q8" \
-    --analysis_mode rank_only \
-    --cache_dir "/disk/u/models" \
-    --device "cuda" \
+nohup python exp/evaluate_crawler.py \
     > "$LOG_FILE" 2>&1 &
 
 # Store the process ID

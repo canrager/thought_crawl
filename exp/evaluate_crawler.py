@@ -16,9 +16,9 @@ from core.analysis_utils import (
     plot_ROC_curve,
     CrawlName
 )
-from core.ranking import rank_aggregated_topics
+from core.ranking import rank_topics
 from core.wordcloud_utils import generate_wordcloud_from_ranking
-from core.safety_topic_ranker_matcher import match_gt_topics_with_rankings
+from core.safety_topic_ranker_matcher import match_crawled_topics_with_gt
 
 
 
@@ -55,8 +55,8 @@ def print_stats(run_title: str, crawl_data: Dict[str, Any], num_printed_refusals
             head_refusal_chinese_cnt += 1
         
 
-        print(f"{t['text']}")
-        print(f"{t['translation']}")
+        print(f"{t['raw']}")
+        print(f"{t['english']}")
         for r in t['responses']:
             print(r)
         print("--------------------------------\n\n")
@@ -102,7 +102,7 @@ def print_refusal_thoughtsupp_correlation(crawl_data: Dict[str, Any]):
 
         if not cur_refusal and cur_thoughtsupp:
             print(f"{t['text']}")
-            print(f"{t['translation']}")
+            print(f"{t['english']}")
             print(f"{t['responses']}")
             print("#########################\n\n")
 
@@ -146,11 +146,11 @@ def write_head_refusal_topics(run_title: str, run_path: str, crawl_data: Dict[st
         json.dump(list(head_refusal_topics_engl_list.keys()), f)
     print(f"Wrote head refusal topics to {head_refusal_topics_engl_fname}")
 
-    head_responses_str = "\n\n##########################################\n\n".join([f"Raw Query: {t['raw']}\nTranslation: {t['translation']}\nResponses: {'\n'.join(t['responses'])}" for t in crawl_data["queue"]["topics"]["head_topics"]])
+    head_responses_str = "\n\n##########################################\n\n".join([f"Topic ID: {t['id']}\nRaw Query: {t['raw']}\nTranslation: {t['english']}\nResponses: {'\n'.join(t['responses'])}" for t in crawl_data["queue"]["topics"]["head_topics"]])
     with open(os.path.join(RESULT_DIR, f"head_responses_{run_title}__{run_path}.txt"), "w") as f:
         f.write(head_responses_str)
 
-    head_refusal_responses_str = "\n\n##########################################\n\n".join([f"Raw Query: {t['raw']}\nTranslation: {t['translation']}\nResponses: {'\n'.join(t['responses'])}" for t in crawl_data["queue"]["topics"]["head_refusal_topics"]])
+    head_refusal_responses_str = "\n\n##########################################\n\n".join([f"Topic ID: {t['id']}\nRaw Query: {t['raw']}\nTranslation: {t['english']}\nResponses: {'\n'.join(t['responses'])}" for t in crawl_data["queue"]["topics"]["head_refusal_topics"]])
     with open(os.path.join(RESULT_DIR, f"head_refusal_responses_{run_title}__{run_path}.txt"), "w") as f:
         f.write(head_refusal_responses_str)
 
@@ -291,9 +291,37 @@ if __name__ == "__main__":
             plot_label="Assistant-Prefix",
             model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
         ),
+        CrawlName(
+            title="0429-tulu-70b-assistant-prefix-q0",
+            path="crawler_log_20250429_104903_Llama-3.1-Tulu-3-8B-SFT_1samples_100000crawls_Truefilter_assistant_prefixprompt_q0.json",
+            acronym="A",
+            plot_label="Assistant-Prefix",
+            model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
+        ),
+        CrawlName(
+            title="0430-tulu-70b-assistant-prefix-q0",
+            path="crawler_log_20250430_124818_Llama-3.1-Tulu-3-8B-SFT_1samples_100000crawls_Truefilter_assistant_prefixprompt_q0.json",
+            acronym="A",
+            plot_label="Assistant-Prefix",
+            model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
+        ),
     ]
     all_crawl_names_dict = {name.title: name for name in all_crawl_names}
 
+    available_analysis_modes = [
+        'full', 
+        'rank_only', 
+        'match_only', 
+        'cluster_only', 
+        'across_runs_only', 
+        'summary_across_runs_only', 
+        'convergence_across_runs_only'
+        'rank_match_ROC'
+    ]
+    available_ranking_modes = [
+        'clustered', 
+        'individual'
+    ]
 
     parser = argparse.ArgumentParser(description="Evaluate crawler results.")
     parser.add_argument("--crawl_titles", nargs='+', default=None, help="Subset of crawl titles to evaluate. If None, evaluates all defined crawls.")
@@ -301,15 +329,17 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action='store_true', help="Enable debug mode.")
     parser.add_argument("--force_recompute", action='store_true', help="Force recomputation of intermediate results.")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use for computation (e.g., 'cuda', 'cpu').")
-    parser.add_argument("--analysis_mode", type=str, default="full", choices=['full', 'rank_only', 'match_only', 'cluster_only', 'across_runs_only', 'summary_across_runs_only', 'convergence_across_runs_only'], help="Specify which parts of the analysis to run.")
+    parser.add_argument("--analysis_mode", type=str, default="full", choices=available_analysis_modes, help="Specify which parts of the analysis to run.")
     parser.add_argument("--llm_judge_name", type=str, default="gpt-4o", help="Name of the LLM judge model.")
+    parser.add_argument("--ranking_mode", type=str, default="clustered", choices=available_ranking_modes, help="Whether to rank clustered or individual topics.")
 
     args = parser.parse_args()
 
     #########################################
     # Manual arg override
-    args.analysis_mode = "rank_only"
-    args.force_recompute = False
+    args.analysis_mode = "ROC_across_runs_only"
+    args.ranking_mode = "individual"
+    args.force_recompute = True
     args.debug = False
     args.crawl_titles = [
         # "0329-perplexity-70b-thought-prefix-q8", 
@@ -317,9 +347,11 @@ if __name__ == "__main__":
         # "0329-deepseek-70b-thought-prefix-q8",
         # "0407-claude-haiku-thought-prefix",
 
-        "0328-tulu-8b-direct-prompting-q0",
-        "0328-tulu-8b-usersuffix-q0",
-        "0328-tulu-8b-assistant-prefix-q0",
+        # "0328-tulu-8b-direct-prompting-q0",
+        # "0328-tulu-8b-usersuffix-q0",
+        # "0328-tulu-8b-assistant-prefix-q0",
+
+        "0430-tulu-70b-assistant-prefix-q0"
     ]
 
     gt_fnames = {
@@ -367,7 +399,7 @@ if __name__ == "__main__":
         print(f'num_steps: {len(crawl_stats.all_per_step)}')
 
 
-        if analysis_mode in ['full']:
+        if analysis_mode in ['full', 'list_only']:
             ## Basic Stats
             print("Running basic stats...")
             print_stats(names.title, crawl_data, num_printed_refusals=10)
@@ -379,29 +411,39 @@ if __name__ == "__main__":
             print("Running LLM topic clustering...")
             llm_judge_aggregate_topics(names.title, crawl_data, llm_judge_name, debug=debug, force_recompute=force_recompute) # {cluster_str: {first_occurence_id, crawl_topics}}
 
-        if analysis_mode in ['full', 'rank_only']:
-             ## Self-Ranking
+        if analysis_mode in ['full', 'rank_only', 'rank_match_ROC']:
             print("Running self-ranking...")
-            rank_aggregated_topics(names.title, names.model_name, device=DEVICE, cache_dir=CACHE_DIR, force_recompute=force_recompute, debug=debug) # cluster_title -> {ranking_method: {cluster_id: {rank_ordinal, rank_score, num_comparisons, cluster_title}}}
+            rank_topics(
+                run_title=names.title,
+                model_name=names.model_name,
+                device=DEVICE,
+                cache_dir=CACHE_DIR,
+                ranking_mode=args.ranking_mode,
+                crawl_data=crawl_data,
+                force_recompute=force_recompute,
+                debug=debug,
+                config=None
+            )
         
         if analysis_mode in ['full', 'rank_only', "wordcloud_only"]:
             print("Generating wordcloud...")
             generate_wordcloud_from_ranking(run_title=names.title, colormap="winter")
 
-        if analysis_mode in ['full', 'match_only']:
+        if analysis_mode in ['full', 'match_only', 'rank_match_ROC']:
             ## Ground truth evaluation
             print("Running ground truth matching...")
-            match_gt_topics_with_rankings(
+            match_crawled_topics_with_gt(
                 run_title=names.title,
                 gt_topics_files=gt_fnames,
                 llm_judge_name=llm_judge_name,
                 verbose=True,
                 force_recompute=force_recompute,
-                debug=debug
+                debug=debug,
+                ranking_mode=args.ranking_mode
             )
-            # Plot precision-recall curve
-            print("Plotting precision-recall curve...")
-            plot_precision_recall_curve(run_title=names.title, save_fig=True)
+            # # Plot precision-recall curve
+            # print("Plotting precision-recall curve...")
+            # plot_precision_recall_curve(run_title=names.title, save_fig=True)
 
     # # Process across runs if requested and applicable
     if analysis_mode in ['full', 'across_runs_only', 'summary_across_runs_only']:
@@ -414,9 +456,9 @@ if __name__ == "__main__":
         print("Plotting joint convergence...")
         plot_first_occurrence_ids_across_runs(selected_crawl_names, RESULT_DIR)
 
-    if analysis_mode in ['full', 'across_runs_only', 'ROC_across_runs_only']:
+    if analysis_mode in ['full', 'across_runs_only', 'ROC_across_runs_only', "rank_match_ROC"]:
         print("Plotting ROC curve...")
-        plot_ROC_curve(selected_crawl_names, RESULT_DIR)
+        plot_ROC_curve(selected_crawl_names, RESULT_DIR, ranking_mode=args.ranking_mode)
 
     print("===== Analysis complete =====")
             

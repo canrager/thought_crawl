@@ -155,7 +155,7 @@ def load_embedding_model(cache_dir: str, device: str):
     )
     return model_emb, tokenizer_emb
 
-def load_filter_models(cache_dir: Optional[str] = None, device: str = "auto"):
+def load_filter_models(cache_dir: Optional[str] = None, device: str = "auto", load_openai: bool = True):
     if cache_dir is None:
         cache_dir = MODELS_DIR
     if device == "auto":
@@ -166,13 +166,14 @@ def load_filter_models(cache_dir: Optional[str] = None, device: str = "auto"):
     model_emb, tokenizer_emb = load_embedding_model(cache_dir, device)
     
     # Load OpenAI client for embeddings
-    try:
-        openai_client, openai_emb_model_name = load_openai_client()
-        has_openai = True
-    except Exception as e:
-        print(f"Warning: Could not load OpenAI client: {e}")
-        openai_client, openai_emb_model_name = None, None
-        has_openai = False
+    has_openai = False
+    openai_client, openai_emb_model_name = None, None
+    if load_openai:
+        try:
+            openai_client, openai_emb_model_name = load_openai_client()
+            has_openai = True
+        except Exception as e:
+            print(f"Warning: Could not load OpenAI client: {e}")
 
     # NLP model for formatting / subject extraction
     # needs python -m spacy download en_core_web_sm

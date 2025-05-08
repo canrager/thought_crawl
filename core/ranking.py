@@ -15,7 +15,7 @@ from core.ranking_eval import RankingTracker
 # Default ranking configuration
 DEFAULT_RANKING_CONFIG = {
     "num_runs": 1,
-    "num_comparisons": 10_000,
+    "num_comparisons": 5_000,
     "batch_size": 100,
     "use_balanced_pairs": True,
     "elo_initial_rating": 1000,
@@ -30,7 +30,7 @@ DEFAULT_RANKING_CONFIG = {
 
 DEBUG_RANKING_CONFIG = {
     "num_runs": 1,
-    "num_comparisons": 1000,
+    "num_comparisons": 200,
     "batch_size": 100,
     "use_balanced_pairs": True,
     "elo_initial_rating": 1000,
@@ -283,36 +283,28 @@ def run_parallel_ranking_experiment(
 
     return final_rankings, metadata
 
+def setup_ranking_experiment(
+        topic_dicts: Dict[str, Dict],
+        run_title: str,
+        model_name: str,
+        device: str,
+        cache_dir: str,
+        config: Dict = None,
+        force_recompute: bool = False,
+        debug: bool = False
+):
+    """Setup ranking experiment for clustered topics."""
 
-def rank_aggregated_topics(
-    run_title: str,
-    model_name: str,
-    device: str,
-    cache_dir: str,
-    config: Dict = None,
-    force_recompute: bool = False,
-    debug: bool = False
-) -> Dict[str, Dict[int, Dict[str, Any]]]:
-    """Rank aggregated topics using specified ranking methods."""
+    # Convert topic dicts to list of topics
+    topics = list(topic_dicts.keys())
 
-# Use provided config or default
+    # Use provided config or default
     if debug:
         ranking_config = DEBUG_RANKING_CONFIG
     elif config:
         ranking_config = config
     else:
-        ranking_config = DEFAULT_RANKING_CONFIG
-
-    save_dir = os.path.join(RESULT_DIR, f"topics_clustered_ranked_{run_title}.json")
-    if os.path.exists(save_dir) and not force_recompute:
-        print(f"Loading the ranked, aggregated topics, since they already exist at: {save_dir}")
-        return json.load(open(save_dir, "r"))
-    
-    clusters_dir = os.path.join(RESULT_DIR, f"topics_clustered_{run_title}.json")
-    if not os.path.exists(clusters_dir):
-        raise FileNotFoundError(f"Topic clusters not found at: {clusters_dir}")
-    clusters = json.load(open(clusters_dir, "r"))
-    
+        ranking_config = DEFAULT_RANKING_CONFIG 
     
     # Set random seeds
     random.seed(ranking_config["seed"])
@@ -326,22 +318,19 @@ def rank_aggregated_topics(
         cache_dir=cache_dir
     )
     
-    # Convert topics dict to list for ranking
-    topic_list = list(clusters.keys())
-    
     # Initialize ranking systems based on config
     ranking_systems = {}
     if "wincount" in ranking_config["ranking_methods"]:
-        ranking_systems["wincount"] = WinCountRanking(topic_list)
+        ranking_systems["wincount"] = WinCountRanking(topics)
     if "elo" in ranking_config["ranking_methods"]:
         ranking_systems["elo"] = EloRanking(
-            topic_list,
+            topics,
             initial_rating=ranking_config["elo_initial_rating"],
             k_factor=ranking_config["elo_k_factor"]
         )
     if "trueskill" in ranking_config["ranking_methods"]:
         ranking_systems["trueskill"] = TrueSkillRanking(
-            topic_list,
+            topics,
             mu=ranking_config["trueskill_mu"],
             sigma=ranking_config["trueskill_sigma"],
             beta=ranking_config["trueskill_beta"],
@@ -349,11 +338,11 @@ def rank_aggregated_topics(
         )
     
     # Initialize trackers
-    trackers = {name: RankingTracker(topic_list) for name in ranking_systems.keys()}
+    trackers = {name: RankingTracker(topics) for name in ranking_systems.keys()}
     
     # Run ranking experiment
     final_rankings, metadata = run_parallel_ranking_experiment(
-        topics=topic_list,
+        topics=topics,
         model=model,
         tokenizer=tokenizer,
         ranking_systems=ranking_systems,
@@ -363,22 +352,122 @@ def rank_aggregated_topics(
         use_balanced_pairs=ranking_config["use_balanced_pairs"]
     )
     
-    # Format results]
+    # Format results
     for method, ranking in final_rankings.items():
         for rank_idx, (topic, score) in enumerate(ranking):
-            if "ranking" not in clusters[topic]:
-                clusters[topic]["ranking"] = {}
-            clusters[topic]["ranking"][method] = {
+            if topic not in topic_dicts:
+                topic_dicts[topic] = {}
+            if "ranking" not in topic_dicts[topic]:
+                topic_dicts[topic]["ranking"] = {}
+            topic_dicts[topic]["ranking"][method] = {
                 "rank_idx": rank_idx,
                 "rank_score": float(score),
                 "num_comparisons": metadata[method]["ranking_counts"][topic]
             }
     
+    del model, tokenizer
+
+    return topic_dicts
+
+def rank_clustered_topics(
+    run_title: str,
+    model_name: str,
+    device: str,
+    cache_dir: str,
+    config: Dict = None,
+    force_recompute: bool = False,
+    debug: bool = False
+) -> Dict[str, Dict[int, Dict[str, Any]]]:
+    """Rank clustered topics using specified ranking methods."""
+
+    # Optionally load pre-ranked topics
+    save_dir = os.path.join(RESULT_DIR, f"topics_clustered_ranked_{run_title}.json")
+    if os.path.exists(save_dir) and not force_recompute:
+        print(f"Loading the ranked, aggregated topics, since they already exist at: {save_dir}")
+        return json.load(open(save_dir, "r"))
+    
+    clusters_dir = os.path.join(RESULT_DIR, f"topics_clustered_{run_title}.json")
+    if not os.path.exists(clusters_dir):
+        raise FileNotFoundError(f"Topic clusters not found at: {clusters_dir}")
+    clusters = json.load(open(clusters_dir, "r"))
+    
+    # Run ranking experiment
+    ranking_results = setup_ranking_experiment(
+        topic_dicts=clusters,
+        run_title=run_title,
+        model_name=model_name,
+        device=device,
+        cache_dir=cache_dir,
+        config=config,
+        force_recompute=force_recompute,
+        debug=debug
+    )
+    
     # Save results
     output_file = os.path.join(RESULT_DIR, f"topics_clustered_ranked_{run_title}.json")
     with open(output_file, "w") as f:
-        json.dump(clusters, f, indent=2)
+        json.dump(ranking_results, f, indent=2)
     
-    del model, tokenizer
+    return ranking_results
 
-    return clusters
+def rank_individual_topics(
+    run_title: str,
+    crawl_data: Dict,
+    model_name: str,
+    device: str,
+    cache_dir: str,
+    config: Dict = None,
+    force_recompute: bool = False,
+    debug: bool = False
+) -> Dict[str, Dict[int, Dict[str, Any]]]:
+    """Rank individual topics using specified ranking methods."""
+
+    # Optionally load pre-ranked topics
+    save_dir = os.path.join(RESULT_DIR, f"topics_ranked_{run_title}.json")
+    if os.path.exists(save_dir) and not force_recompute:
+        print(f"Loading the ranked, aggregated topics, since they already exist at: {save_dir}")
+        return json.load(open(save_dir, "r"))
+    
+    # Run ranking experiment
+    topic_dicts = crawl_data["queue"]["topics"]["head_refusal_topics"]
+    topic_dicts = {t["raw"]: {
+        "first_occurence_id": t["id"],
+    } for t in topic_dicts}
+
+    ranking_results = setup_ranking_experiment(
+        topic_dicts=topic_dicts,
+        run_title=run_title,
+        model_name=model_name,
+        device=device,
+        cache_dir=cache_dir,
+        config=config,
+        force_recompute=force_recompute,
+        debug=debug
+    )
+
+    # Save results
+    output_file = os.path.join(RESULT_DIR, f"topics_ranked_{run_title}.json")
+    with open(output_file, "w") as f:
+        json.dump(ranking_results, f, indent=2)
+
+    return ranking_results
+
+def rank_topics(
+    run_title: str,
+    model_name: str,
+    device: str,
+    cache_dir: str,
+    ranking_mode: str,
+    crawl_data: Optional[Dict] = None,
+    config: Dict = None,
+    force_recompute: bool = False,
+    debug: bool = False
+) -> Dict[str, Dict[int, Dict[str, Any]]]:
+    """Rank topics using specified ranking methods."""
+
+    if ranking_mode == "clustered":
+        return rank_clustered_topics(run_title, model_name, device, cache_dir, config, force_recompute, debug)
+    elif ranking_mode == "individual":
+        return rank_individual_topics(run_title, crawl_data, model_name, device, cache_dir, config, force_recompute, debug)
+    else:
+        raise ValueError(f"Invalid ranking mode: {ranking_mode}")

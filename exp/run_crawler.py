@@ -62,6 +62,7 @@ if __name__ == "__main__":
                         help="Quantization bits for model loading (0 for no quantization, 4 or 8 for quantization)")
     parser.add_argument("--prompt_injection_location", type=str, choices=["user_all", "user_suffix", "assistant_prefix", "thought_prefix", "thought_suffix"],
                         help="Where to inject the prompt in the conversation")
+    parser.add_argument("--not_use_openai_embeddings", action="store_true", help="Do not use OpenAI embeddings for filtering")
     args = parser.parse_args()
 
     if args.debug:
@@ -81,7 +82,7 @@ if __name__ == "__main__":
         model_crawl = args.model_path
         tokenizer_crawl = None
     
-    filter_models = load_filter_models(args.cache_dir, args.device)
+    filter_models = load_filter_models(args.cache_dir, args.device, load_openai=not args.not_use_openai_embeddings)
 
     # Get crawler name
     run_name = get_run_name(args.model_path, exp_config["crawler"], args.prompt_injection_location)

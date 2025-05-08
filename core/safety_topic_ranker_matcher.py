@@ -84,7 +84,7 @@ def parse_similarity_response(response: str) -> Tuple[bool, List[str]]:
     return is_match, matched_topics
 
 def compare_topics(gt_topic: str, crawled_topics: List[str], llm_judge_name: str, verbose: bool = False) -> Tuple[bool, List[str]]:
-    """Compare one ground truth topic against crawled topics using Anthropic"""
+    """Compare one ground truth topic against crawled topics using LLM judge"""
     start_time = time.time()
     prompt = build_similarity_prompt(gt_topic, crawled_topics)
     
@@ -116,9 +116,10 @@ def match_gt_topics_with_rankings(
     llm_judge_name: str,
     verbose: bool = False,
     force_recompute: bool = False,
-    debug: bool = False
+    debug: bool = False,
 ) -> Tuple[Dict, List[str]]:
-    """Match ground truth safety topics with ranked topics and identify unmatched topics"""
+    """Match ground truth safety topics with ranked topics and identify unmatched topics
+    Many ranked topics --> one ground truth topic"""
     start_time = time.time()
 
     # Load existing results if not force_recompute
@@ -132,7 +133,7 @@ def match_gt_topics_with_rankings(
     if not os.path.exists(clusters_dir):
         raise FileNotFoundError(f"Rankings file not found at: {clusters_dir}")
     with open(clusters_dir, "r") as f:
-        clusters = json.load(f)
+        topics = json.load(f)
 
     # Load ground truth topics
     gt_topic_to_first_occurence_id = {}
@@ -156,10 +157,10 @@ def match_gt_topics_with_rankings(
                 
                 gt_topic_str = f"{gt_dataset}:{gt_category}:{gt_topic}"
                 gt_topic_to_first_occurence_id[gt_topic_str] = None
-                is_match, matched_topics = compare_topics(gt_topic, clusters.keys(), llm_judge_name, verbose)
+                is_match, matched_topics = compare_topics(gt_topic, topics.keys(), llm_judge_name, verbose)
                 
                 # Add match status and matched topic to each ranking method
-                for cluster_str, cluster_data in clusters.items():
+                for cluster_str, cluster_data in topics.items():
                     # Initialize ground_truth_matches if it doesn't exist
                     if "ground_truth_matches" not in cluster_data:
                         cluster_data["ground_truth_matches"] = []
@@ -185,7 +186,7 @@ def match_gt_topics_with_rankings(
     # Save results with ground truth matches
     output_file = os.path.join(RESULT_DIR, f"topics_clustered_ranked_matched_{run_title}.json")
     with open(output_file, "w") as f:
-        json.dump(clusters, f, indent=2)
+        json.dump(topics, f, indent=2)
 
     # Save gt_topic_to_first_occurence_id
     output_file = os.path.join(RESULT_DIR, f"topics_matched_first_occurence_id_{run_title}.json")
@@ -194,7 +195,7 @@ def match_gt_topics_with_rankings(
     
     # Save unmatched topics
     unmatched_topics = []
-    for cluster_str, cluster_data in clusters.items():
+    for cluster_str, cluster_data in topics.items():
         if not cluster_data.get("is_match", False):
             unmatched_topics.append(cluster_str)
     unmatched_file = os.path.join(RESULT_DIR, f"unmatched_clusters_{run_title}.json")
@@ -204,9 +205,76 @@ def match_gt_topics_with_rankings(
     print(f"\nResults saved to {output_file}")
     print(f"Unmatched topics saved to {unmatched_file}")
     
-    return clusters, unmatched_topics
+    return topics, unmatched_topics
+
+def match_ranked_topics_with_gt(
+    run_title: str,
+    gt_topics_files: Dict[str, str],
+    llm_judge_name: str,
+    verbose: bool = False,
+    force_recompute: bool = False,
+    debug: bool = False,
+) -> Tuple[Dict, List[str]]:
+    """Match ranked topics with ground truth topics
+    many ground truth topics --> one ranked topic"""
+
+    # Load existing results if not force_recompute
+    output_file = os.path.join(RESULT_DIR, f"topics_ranked_matched_{run_title}.json")
+    if os.path.exists(output_file) and not force_recompute:
+        print(f"Loading existing results from {output_file}")
+        return json.load(open(output_file, "r")), []
+    
+    # Load ranked topics
+    ranked_topics_file = os.path.join(RESULT_DIR, f"topics_ranked_{run_title}.json")
+    with open(ranked_topics_file, "r") as f:
+        ranked_topics = json.load(f)
+
+    # Load ground truth topics
+    all_gt_topics = []
+    for gt_dataset, gt_file in gt_topics_files.items():
+        gt_topics_dir = os.path.join(INPUT_DIR, f"{gt_file}.json")
+        if not os.path.exists(gt_topics_dir):
+            raise FileNotFoundError(f"Ground truth topics file not found at: {gt_topics_dir}")
+        with open(gt_topics_dir, "r") as f:
+            gt_topics_dict = json.load(f)
+
+        for gt_category, gt_topics in gt_topics_dict.items():
+            for gt_topic in gt_topics:
+                gt_topic_name = f"{gt_dataset}:{gt_category}:{gt_topic}"
+                all_gt_topics.append(gt_topic_name)
+    
+    # Compare ranked topics with ground truth topics
+    for i, ranked_topic in enumerate(ranked_topics):
+        is_match, matched_topics = compare_topics(ranked_topic, all_gt_topics, llm_judge_name, verbose)
+        ranked_topics[ranked_topic]["is_match"] = is_match
+        ranked_topics[ranked_topic]["matched_topics"] = matched_topics
+        if debug and i > 3:
+            break
+
+    # Save results
+    with open(output_file, "w") as f:
+        json.dump(ranked_topics, f, indent=2)
+
+    return ranked_topics
 
 
+def match_crawled_topics_with_gt(
+    run_title: str,
+    gt_topics_files: Dict[str, str],
+    llm_judge_name: str,
+    verbose: bool = False,
+    force_recompute: bool = False,
+    debug: bool = False,
+    ranking_mode: str = "clustered"
+) -> Tuple[Dict, List[str]]:
+    if ranking_mode == "clustered":
+        # Many ranked topics --> one ground truth topic
+        return match_gt_topics_with_rankings(run_title, gt_topics_files, llm_judge_name, verbose, force_recompute, debug)
+    elif ranking_mode == "individual":
+        # Many ground truth topics --> one ranked topic
+        return match_ranked_topics_with_gt(run_title, gt_topics_files, llm_judge_name, verbose, force_recompute, debug)
+    else:
+        raise ValueError(f"Invalid ranking mode: {ranking_mode}")
 
 
 if __name__ == "__main__":
