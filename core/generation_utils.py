@@ -110,6 +110,7 @@ def batch_generate_from_tokens(
     max_new_tokens: Optional[int] = None,
     skip_special_tokens: bool = False,
     temperature: Optional[float] = None,
+    verbose: bool = False,
 ):
     """
     Generate text based on the input prompt.
@@ -146,6 +147,12 @@ def batch_generate_from_tokens(
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
+
+    if verbose:
+        for output in outputs:
+            decoded = [tokenizer.decode(o, skip_special_tokens=False) for o in output]
+            print("====================")
+            print("".join([f"{s}[{i}]" for i, s in zip(output, decoded)]))
 
     model_name = model.config._name_or_path
     generated_texts = custom_decoding(model_name, tokenizer, outputs, skip_special_tokens)
@@ -276,13 +283,14 @@ def batch_generate(
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     skip_special_tokens=skip_special_tokens,
+                    verbose=False,
                 )
                 generated_texts.extend(batch_generations)
 
     if verbose:
         input_tokens = custom_decoding(model_name, tokenizer, input_ids, skip_special_tokens)
         for i, o in zip(input_tokens, generated_texts):
-            print(f"input: {i}\noutput: {o}\n\n")
+            print(f"===========================\n====input: {i}\n\n==== output:\n {o}\n\n")
     return generated_texts
 
 

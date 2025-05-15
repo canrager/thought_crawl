@@ -11,7 +11,7 @@ DEFAULT_CONFIG = {
     "crawler": CrawlerConfig(
             temperature=0.6,
             num_samples_per_topic=1,
-            num_crawl_steps=100_000,
+            num_crawl_steps=1000,
             generation_batch_size=2,
             max_topic_string_length=100,
             max_generated_tokens=100,

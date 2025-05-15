@@ -11,6 +11,7 @@ SPECIAL_TOKEN_MAP = {
             "USER": 128011,
             "ASSISTANT": 128012,
             "NEWLINE": 198,
+            "DOUBLE_NEWLINE": 271,
             "THINK_START": 128013,
             "THINK_END": 128014,
             "EOS": 128001,
@@ -110,7 +111,7 @@ def custom_encoding_r1(
     #     token_ids = token_ids + [st["THINK_START"]] + [st["NEWLINE"]]
     
     if force_thought_skip:  
-        token_ids = token_ids + [st["NEWLINE"]] + [st["THINK_END"]]
+        token_ids = token_ids + [st["THINK_START"], st["DOUBLE_NEWLINE"], st["THINK_END"], st["DOUBLE_NEWLINE"]]
 
     return token_ids
 

@@ -40,10 +40,16 @@ def get_head_topic_dict(key: str, crawl_data: dict, include_raw: bool = False) -
     """Get head topics from crawl data"""
     head_topics_engl_list = {}
     for t in crawl_data["queue"]["topics"][key]:
-        topic_str = t["english"]
-        if t["is_chinese"]:
-            if include_raw:
-                topic_str = f"{t['chinese']} ({t['english']})"
+        if "english" in t: # Current formatting (english / chinese)
+            topic_str = t["english"]
+            if t["is_chinese"]:
+                if include_raw:
+                    topic_str = f"{t['chinese']} ({t['english']})"
+        else: # Old formatting (raw / translation)
+            if t["translation"]:
+                topic_str = f"{t['raw']} ({t['translation']})"
+            else:
+                topic_str = t["raw"]
         head_topics_engl_list[topic_str] = [str(t["id"])]
     return head_topics_engl_list
 
@@ -178,6 +184,7 @@ def llm_judge_topic_deduplication_batched(topic_to_list: Dict[str, List[str]], r
     if save_results:
         with open(save_dir, "w") as f:
             json.dump(all_clusters, f, indent=2)
+    print(f"Saved LLM aggregated topics for {run_title} to {save_dir}")
     
     return all_clusters
 
@@ -765,7 +772,7 @@ def generate_latex_match_table(df: pd.DataFrame, mode: str) -> Tuple[str, str]:
     else:
         raise ValueError(f"Invalid mode: {mode}")
 
-def plot_recall_curves_across_files(label_to_file: Dict[str, str], result_dir: str, max_steps: int = 20000) -> None:
+def plot_recall_curves_across_files(label_to_file: Dict[str, str], result_dir: str, max_steps: int = 20000, font_size: int = 28) -> None:
     """
     Creates a combined plot of recall curves across multiple files containing ground truth categories.
     Each file is plotted in a different color on the same subplot.
@@ -774,15 +781,16 @@ def plot_recall_curves_across_files(label_to_file: Dict[str, str], result_dir: s
         label_to_file: Dictionary mapping plot labels to file paths containing ground truth categories
         result_dir: Directory to save the output plot
         max_steps: Maximum number of topics to plot on x-axis
+        font_size: Font size for the plot (default: 18)
     """
     import matplotlib.pyplot as plt
     import numpy as np
     from typing import Dict, List, Set
     
     # Set font properties
-    plt.rcParams.update({'font.size': 14, 'font.family': 'Palatino'})
+    plt.rcParams.update({'font.size': font_size, 'font.family': 'Times New Roman'})
     
-    plt.figure(figsize=(6, 4))
+    plt.figure(figsize=(4, 3))
     
     # Use a different color for each file
     colors = plt.cm.tab10(np.linspace(0, 1, len(label_to_file)))
@@ -839,6 +847,247 @@ def plot_recall_curves_across_files(label_to_file: Dict[str, str], result_dir: s
                 y_data.append(recall)
             
             # Plot this file's data
+            plt.plot(x_data, y_data, label=label, color=color, alpha=0.8, linewidth=2)
+            
+        except FileNotFoundError:
+            print(f"Warning: File not found: {file_path}")
+            continue
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode JSON from {file_path}")
+            continue
+    
+    plt.xlabel('Number of Topics')
+    plt.ylabel('Recall')
+    plt.ylim(-0.01, 1.01)  # Slightly extend y-axis for better visualization
+    plt.grid(True, linestyle='-')
+    
+    # Position legend below the plot, centered, with horizontal entries and no frame
+    plt.legend(loc='lower right', facecolor='white')
+    
+    # Adjust layout to prevent legend cutoff
+    plt.tight_layout()
+    
+    # Save the plot
+    date_str = datetime.now().strftime("%Y%m%d")
+    # Use only alphanumeric chars and underscores from labels for filename safety
+    safe_labels = ["".join(c for c in label if c.isalnum() or c == '_') for label in label_to_file.keys()]
+    labels_str = "--".join(safe_labels)
+    output_file = os.path.join(result_dir, f"recall_curves_comparison_{date_str}_{labels_str}.png")
+    plt.savefig(output_file, bbox_inches='tight', dpi=250)
+    plt.close()
+    
+    print(f"Recall curves comparison plot saved to {output_file}")
+
+def plot_precision_at_k_across_files(label_to_file: Dict[str, str], result_dir: str, max_steps: int = 20000) -> None:
+    """
+    Creates grouped bar plots showing precision at k=10, 100, 1000 across multiple files.
+    Each group represents a different file, and within each group are bars for different k values.
+    Uses ELO ranking indices for ordering topics.
+    
+    Args:
+        label_to_file: Dictionary mapping plot labels to file paths containing ranked topics
+        result_dir: Directory to save the output plot
+        max_steps: Maximum number of topics to consider (not used in this function but kept for signature consistency)
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from typing import Dict, List, Set
+    
+    # Set font properties
+    plt.rcParams.update({'font.size': 14, 'font.family': 'Palatino'})
+    
+    # Define the k values we want to measure precision at
+    k_values = [10, 100, 1000]
+    
+    # Calculate precision at each k for each file
+    precision_data = {k: [] for k in k_values}
+    labels = []
+    
+    for label, file_path in label_to_file.items():
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            
+            # Get topics sorted by their ELO rank index
+            ranked_topics = sorted(data.items(), key=lambda x: x[1]['ranking']['elo']['rank_idx'])
+            
+            if not ranked_topics:
+                print(f"Warning: No ranked topics found in {file_path}")
+                continue
+            
+            labels.append(label)
+            
+            # Calculate precision at each k
+            for k in k_values:
+                # Count how many topics are matches within first k ranked topics
+                matches = sum(1 for _, topic_info in ranked_topics[:k] if topic_info.get('is_match', False))
+                precision = matches / k
+                precision_data[k].append(precision)
+            
+        except FileNotFoundError:
+            print(f"Warning: File not found: {file_path}")
+            continue
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode JSON from {file_path}")
+            continue
+        except KeyError as e:
+            print(f"Warning: Missing expected key in data structure: {e}")
+            continue
+    
+    if not labels:
+        print("Error: No valid data found for any file")
+        return
+    
+    # Create the plot
+    plt.figure(figsize=(10, 6))
+    
+    # Set up the bar positions
+    x = np.arange(len(k_values))  # the k value locations
+    width = 0.25  # the width of the bars
+    multiplier = 0
+    
+    # Plot bars for each file
+    for label, color in zip(labels, plt.cm.tab10(np.linspace(0, 1, len(labels)))):
+        precisions = [precision_data[k][multiplier] for k in k_values]
+        offset = width * multiplier
+        rects = plt.bar(x + offset, precisions, width, label=label, color=color)
+        multiplier += 1
+    
+    # Add labels and title
+    plt.xlabel('k value')
+    plt.ylabel('Precision')
+    plt.title('Precision at k across different files')
+    plt.xticks(x + width/2, [f'k={k}' for k in k_values])
+    plt.ylim(0, 1.1)  # Set y-axis limit to accommodate precision values
+    
+    # Add grid for better readability
+    plt.grid(True, linestyle='--', alpha=0.7, axis='y')
+    
+    # Add legend
+    plt.legend(loc='lower right')
+    
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+    
+    # Save the plot
+    date_str = datetime.now().strftime("%Y%m%d")
+    # Use only alphanumeric chars and underscores from labels for filename safety
+    safe_labels = ["".join(c for c in label if c.isalnum() or c == '_') for label in label_to_file.keys()]
+    labels_str = "--".join(safe_labels)
+    output_file = os.path.join(result_dir, f"precision_at_k_comparison_{date_str}_{labels_str}.png")
+    plt.savefig(output_file, bbox_inches='tight', dpi=200)
+    plt.close()
+    
+    print(f"Precision at k comparison plot saved to {output_file}")
+
+def plot_recall_curves_for_gt_topics(label_to_file: Dict[str, str], result_dir: str, max_steps: int = 20000) -> None:
+    """
+    Creates a combined plot of recall curves across multiple files containing matched topics.
+    The function extracts unique ground truth topics from the "matched_topics" field,
+    finds the first occurrence of each ground truth topic, and plots recall curves.
+    
+    If a ground truth topic contains colons (":"), only the last part after the final colon is used
+    to reduce the number of unique topics by grouping related concepts.
+    All topics are converted to lowercase for case-insensitive matching.
+    
+    Args:
+        label_to_file: Dictionary mapping plot labels to file paths containing matched topics
+                      (e.g., topics_ranked_matched_*.json files)
+        result_dir: Directory to save the output plot
+        max_steps: Maximum number of topics to plot on x-axis
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from typing import Dict, List, Set
+    
+    # Set font properties
+    plt.rcParams.update({'font.size': 14, 'font.family': 'Palatino'})
+    
+    plt.figure(figsize=(6, 4))
+    
+    # Use a different color for each file
+    colors = plt.cm.tab10(np.linspace(0, 1, len(label_to_file)))
+    
+    # First pass: collect all unique ground truth topics across all files
+    all_gt_topics: Set[str] = set()
+    
+    for label, file_path in label_to_file.items():
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                
+            # Extract all matched topics
+            for topic_info in data.values():
+                if topic_info.get('is_match', False) and 'matched_topics' in topic_info:
+                    matched_topics = topic_info['matched_topics']
+                    # Filter out "None" entries and process topics
+                    for topic in matched_topics:
+                        if topic and topic.lower() != "none":
+                            # Extract the last part after the final colon if it exists, convert to lowercase
+                            processed_topic = topic.split(":")[-1].strip().lower()
+                            all_gt_topics.add(processed_topic)
+                    
+        except FileNotFoundError:
+            print(f"Warning: File not found: {file_path}")
+            continue
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode JSON from {file_path}")
+            continue
+    
+    if not all_gt_topics:
+        print("Error: No valid ground truth topics found in any file")
+        plt.close()
+        return
+    
+    num_gt_topics = len(all_gt_topics)
+    print(f"Found {num_gt_topics} unique ground truth topics across all files")
+    
+    # Second pass: find first occurrence of each ground truth topic and plot recall curves
+    for (label, file_path), color in zip(label_to_file.items(), colors):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            
+            # Find first occurrence of each ground truth topic
+            gt_topic_to_first_occurrence = {}
+            
+            # Sort topics by first_occurrence_id to ensure we find the earliest occurrence
+            sorted_topics = sorted(data.items(), key=lambda x: x[1].get('first_occurence_id', float('inf')))
+            
+            for topic_key, topic_info in sorted_topics:
+                if topic_info.get('is_match', False) and 'matched_topics' in topic_info:
+                    matched_topics = topic_info['matched_topics']
+                    first_occurence_id = topic_info.get('first_occurence_id')
+                    
+                    if first_occurence_id is not None:
+                        for gt_topic in matched_topics:
+                            if gt_topic and gt_topic.lower() != "none":
+                                # Process the topic to get the part after the last colon and convert to lowercase
+                                processed_topic = gt_topic.split(":")[-1].strip().lower()
+                                
+                                if processed_topic in all_gt_topics:
+                                    # Only record the first occurrence if it hasn't been seen before
+                                    if processed_topic not in gt_topic_to_first_occurrence:
+                                        gt_topic_to_first_occurrence[processed_topic] = first_occurence_id
+            
+            # Extract first occurrence IDs and sort them
+            first_occurrences = sorted(gt_topic_to_first_occurrence.values())
+            
+            if not first_occurrences:
+                print(f"Warning: No valid first occurrence IDs found in {file_path}")
+                continue
+            
+            # Calculate recall at each step
+            x_data = list(range(1, max_steps + 1))
+            y_data = []
+            
+            for step in x_data:
+                # Count how many ground truth topics were found by this step
+                found_topics = sum(1 for fid in first_occurrences if fid <= step)
+                recall = found_topics / num_gt_topics
+                y_data.append(recall)
+            
+            # Plot this file's data
             plt.plot(x_data, y_data, label=label, color=color, alpha=0.8)
             
         except FileNotFoundError:
@@ -846,6 +1095,9 @@ def plot_recall_curves_across_files(label_to_file: Dict[str, str], result_dir: s
             continue
         except json.JSONDecodeError:
             print(f"Warning: Could not decode JSON from {file_path}")
+            continue
+        except Exception as e:
+            print(f"Warning: Error processing {file_path}: {e}")
             continue
     
     plt.xlabel('Number of Topics')
@@ -865,8 +1117,65 @@ def plot_recall_curves_across_files(label_to_file: Dict[str, str], result_dir: s
     # Use only alphanumeric chars and underscores from labels for filename safety
     safe_labels = ["".join(c for c in label if c.isalnum() or c == '_') for label in label_to_file.keys()]
     labels_str = "--".join(safe_labels)
-    output_file = os.path.join(result_dir, f"recall_curves_comparison_{date_str}_{labels_str}.png")
+    output_file = os.path.join(result_dir, f"gt_recall_curves_comparison_{date_str}_{labels_str}.png")
     plt.savefig(output_file, bbox_inches='tight', dpi=200)
     plt.close()
     
-    print(f"Recall curves comparison plot saved to {output_file}")
+    print(f"Ground truth topic recall curves comparison plot saved to {output_file}")
+    
+    # Prepare overall stats
+    overall_stats = {
+        "total_unique_gt_topics": num_gt_topics,
+        "all_unique_gt_topics": sorted(list(all_gt_topics)),  # Save all unique ground truth topics
+        "per_file_stats": {}
+    }
+    
+    # Collect stats for each file
+    for label, file_path in label_to_file.items():
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            
+            # Count unique ground truth topics found in this file
+            found_gt_topics = set()
+            gt_topic_to_first_occurrence = {}
+            gt_topic_to_first_occurrence_text = {}
+            
+            # Sort topics by first_occurrence_id to process in order
+            sorted_topics = sorted(data.items(), key=lambda x: x[1].get('first_occurence_id', float('inf')))
+            
+            for topic_key, topic_info in sorted_topics:
+                if topic_info.get('is_match', False) and 'matched_topics' in topic_info:
+                    first_occurence_id = topic_info.get('first_occurence_id')
+                    
+                    for topic in topic_info['matched_topics']:
+                        if topic and topic.lower() != "none":
+                            # Process the topic to get the part after the last colon and convert to lowercase
+                            processed_topic = topic.split(":")[-1].strip().lower()
+                            found_gt_topics.add(processed_topic)
+                            
+                            # Record the first occurrence ID for this topic if not already recorded
+                            if processed_topic not in gt_topic_to_first_occurrence and first_occurence_id is not None:
+                                gt_topic_to_first_occurrence[processed_topic] = first_occurence_id
+                                gt_topic_to_first_occurrence_text[processed_topic] = topic_key
+            
+            # Store detailed statistics for this file
+            overall_stats["per_file_stats"][label] = {
+                "total_gt_topics": num_gt_topics,
+                "found_gt_topics_count": len(found_gt_topics),
+                "found_gt_topics": sorted(list(found_gt_topics)),  # Save found ground truth topics
+                "gt_topic_to_first_occurrence": gt_topic_to_first_occurrence,  # Save when each topic was found
+                "gt_topic_to_first_occurrence_text": gt_topic_to_first_occurrence_text,  # Save the original topic text
+                "recall": len(found_gt_topics) / num_gt_topics if num_gt_topics > 0 else 0
+            }
+            
+        except Exception as e:
+            overall_stats["per_file_stats"][label] = {"error": f"Failed to process file: {str(e)}"}
+    
+    # Save statistics
+    stats_file = os.path.join(result_dir, f"gt_recall_stats_{date_str}_{labels_str}.json")
+    with open(stats_file, 'w') as f:
+        json.dump(overall_stats, f, indent=2)
+    
+    print(f"Ground truth topic recall statistics saved to {stats_file}")
+    return overall_stats

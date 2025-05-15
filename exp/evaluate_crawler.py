@@ -305,11 +305,26 @@ if __name__ == "__main__":
             plot_label="Assistant-Prefix",
             model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
         ),
+        CrawlName(
+            title="0509-tulu-70b-assistant-prefix-q0",
+            path="crawler_log_20250430_124818_Llama-3.1-Tulu-3-8B-SFT_1samples_100000crawls_Truefilter_assistant_prefixprompt_q0.json",
+            acronym="A2",
+            plot_label="Assistant-Prefix",
+            model_name="allenai/Llama-3.1-Tulu-3-8B-SFT"
+        ),
+        CrawlName(
+            title="0508-claude-haiku-thought-prefix",
+            path="crawler_log_20250508_122246_claude-3-5-haiku-latest_1samples_1000crawls_Truefilter_thought_prefixprompt_q8.json",
+            acronym="C",
+            plot_label="Claude-Haiku-3.5",
+            model_name="claude-3-5-haiku-latest"
+        ),
     ]
     all_crawl_names_dict = {name.title: name for name in all_crawl_names}
 
     available_analysis_modes = [
         'full', 
+        'list_only',
         'rank_only', 
         'match_only', 
         'cluster_only', 
@@ -337,21 +352,23 @@ if __name__ == "__main__":
 
     #########################################
     # Manual arg override
-    args.analysis_mode = "ROC_across_runs_only"
+    args.analysis_mode = "list_only"
     args.ranking_mode = "individual"
     args.force_recompute = True
     args.debug = False
     args.crawl_titles = [
-        # "0329-perplexity-70b-thought-prefix-q8", 
-        # "0329-meta-70b-assistant-prefix-q8",
-        # "0329-deepseek-70b-thought-prefix-q8",
+        "0329-perplexity-70b-thought-prefix-q8", 
+        "0329-meta-70b-assistant-prefix-q8",
+        "0329-deepseek-70b-thought-prefix-q8",
         # "0407-claude-haiku-thought-prefix",
 
         # "0328-tulu-8b-direct-prompting-q0",
         # "0328-tulu-8b-usersuffix-q0",
         # "0328-tulu-8b-assistant-prefix-q0",
 
-        "0430-tulu-70b-assistant-prefix-q0"
+        # "0430-tulu-70b-assistant-prefix-q0"
+        # "0509-tulu-70b-assistant-prefix-q0"
+        "0508-claude-haiku-thought-prefix"
     ]
 
     gt_fnames = {

@@ -257,6 +257,65 @@ def match_ranked_topics_with_gt(
 
     return ranked_topics
 
+def match_ranked_topics_with_gt_jsonl(
+    run_title: str,
+    gt_topics_files: Dict[str, str],
+    llm_judge_name: str,
+    verbose: bool = False,
+    force_recompute: bool = False,
+    debug: bool = False,
+) -> Tuple[Dict, List[str]]:
+    """Match ranked topics with ground truth topics from JSONL file
+    many ground truth topics --> one ranked topic"""
+
+    # Load existing results if not force_recompute
+    output_file = os.path.join(RESULT_DIR, f"topics_ranked_matched_{run_title}.json")
+    if os.path.exists(output_file) and not force_recompute:
+        print(f"Loading existing results from {output_file}")
+        return json.load(open(output_file, "r")), []
+    
+    # Load ranked topics from JSONL
+    ranked_topics_file = os.path.join(RESULT_DIR, f"{run_title}_extracted_topics.jsonl")
+    ranked_topics = {}
+    with open(ranked_topics_file, "r") as f:
+        for i, line in enumerate(f):
+            topics = json.loads(line.strip())
+            for topic in topics:
+                if topic not in ranked_topics:
+                    ranked_topics[topic] = {
+                        "sentence_id": i,  # Store original first_occurence_id as sentence_id
+                        "first_occurence_id": len(ranked_topics),  # Use index as first_occurence_id
+                        "is_match": False,
+                        "matched_topics": []
+                    }
+
+    # Load ground truth topics
+    all_gt_topics = []
+    for gt_dataset, gt_file in gt_topics_files.items():
+        gt_topics_dir = os.path.join(INPUT_DIR, f"{gt_file}.json")
+        if not os.path.exists(gt_topics_dir):
+            raise FileNotFoundError(f"Ground truth topics file not found at: {gt_topics_dir}")
+        with open(gt_topics_dir, "r") as f:
+            gt_topics_dict = json.load(f)
+
+        for gt_category, gt_topics in gt_topics_dict.items():
+            for gt_topic in gt_topics:
+                gt_topic_name = f"{gt_dataset}:{gt_category}:{gt_topic}"
+                all_gt_topics.append(gt_topic_name)
+    
+    # Compare ranked topics with ground truth topics
+    for i, ranked_topic in enumerate(ranked_topics):
+        is_match, matched_topics = compare_topics(ranked_topic, all_gt_topics, llm_judge_name, verbose)
+        ranked_topics[ranked_topic]["is_match"] = is_match
+        ranked_topics[ranked_topic]["matched_topics"] = matched_topics
+        if debug and i > 3:
+            break
+
+    # Save results
+    with open(output_file, "w") as f:
+        json.dump(ranked_topics, f, indent=2)
+
+    return ranked_topics, []
 
 def match_crawled_topics_with_gt(
     run_title: str,
@@ -273,6 +332,9 @@ def match_crawled_topics_with_gt(
     elif ranking_mode == "individual":
         # Many ground truth topics --> one ranked topic
         return match_ranked_topics_with_gt(run_title, gt_topics_files, llm_judge_name, verbose, force_recompute, debug)
+    elif ranking_mode == "individual_jsonl":
+        # Many ground truth topics --> one ranked topic from JSONL
+        return match_ranked_topics_with_gt_jsonl(run_title, gt_topics_files, llm_judge_name, verbose, force_recompute, debug)
     else:
         raise ValueError(f"Invalid ranking mode: {ranking_mode}")
 
