@@ -10,7 +10,7 @@ from typing import Dict, List, Tuple, Optional, Union
 import nnsight
 from nnsight import CONFIG, LanguageModel
 from transformers import AutoTokenizer
-from core.model_utils import load_model
+from core.llm_utils import load_model
 from core.tokenization_utils import get_special_tokens, custom_decoding, custom_batch_encoding
 from core.project_config import RESULT_DIR, INPUT_DIR, INTERIM_DIR
 

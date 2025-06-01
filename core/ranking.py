@@ -8,7 +8,7 @@ import json
 import os
 import torch
 from core.generation_utils import batch_generate
-from core.model_utils import load_model
+from core.llm_utils import load_model
 from core.project_config import RESULT_DIR
 from core.ranking_eval import RankingTracker
 

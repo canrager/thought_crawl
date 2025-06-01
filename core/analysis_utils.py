@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from dataclasses import dataclass
-from core.model_utils import load_model
+from core.llm_utils import load_model
 from core.ranking import WinCountRanking, EloRanking, TrueSkillRanking
 from core.ranking_eval import RankingTracker
 import random

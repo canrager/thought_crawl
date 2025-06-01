@@ -1,10 +1,17 @@
+!**/.gitkeep
+
 # Environment
 __pycache__/
 *.lock
 
 # Directories
 artifacts
-logs
 exp/prototypes
-# *_run_crawler.sh
+
+!artifacts/.gitkeep
+!artifacts/input/.gitkeep
+!artifacts/interim/.gitkeep
+!artifacts/result/.gitkeep
+!artifacts/log/.gitkeep
+!exp/prototypes/.gitkeep
 

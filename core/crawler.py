@@ -12,17 +12,40 @@ import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
 from torch.nn import functional as F
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM, AutoModel
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSeq2SeqLM,
+    AutoModelForCausalLM,
+    AutoModel,
+)
 from spacy.language import Language
 import psutil
-from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+from pynvml import (
+    nvmlInit,
+    nvmlDeviceGetHandleByIndex,
+    nvmlDeviceGetMemoryInfo,
+    NVMLError,
+)
 
-from core.generation_utils import batch_generate, compute_embeddings, batch_compute_openai_embeddings, batch_complete_R1
+from core.generation_utils import (
+    batch_generate,
+    compute_embeddings,
+    batch_compute_openai_embeddings,
+    batch_complete_R1,
+)
 from core.topic_queue import TopicQueue, Topic
 from core.crawler_config import CrawlerConfig
 from core.tokenization_utils import match_chat_template
+
 EPS = 1e-10
-nvmlInit()
+
+nvml_available = False
+try:
+    nvmlInit()
+    nvml_available = True
+    print("NVML initialized successfully.")
+except NVMLError as e:
+    print(f"NVML initialization failed: {e}. GPU monitoring will be disabled.")
 
 
 class CrawlerStats:
@@ -52,7 +75,9 @@ class CrawlerStats:
         self.all_per_step.append(new_topics_all)
         self.deduped_per_step.append(new_topics_deduped)
         self.refusal_per_step.append(new_topics_refusals)
-        self.cluster_sizes_per_step.append([len(cluster) for cluster in current_clusters])
+        self.cluster_sizes_per_step.append(
+            [len(cluster) for cluster in current_clusters]
+        )
 
     def get_current_metrics(self) -> dict:
         """Get current state of metrics"""
@@ -63,12 +88,17 @@ class CrawlerStats:
             "avg_refusal_rate": (sum(self.refusal_per_step) / (self.total_all + EPS)),
             "current_step": len(self.all_per_step),
             "largest_cluster": (
-                max(self.cluster_sizes_per_step[-1]) if self.cluster_sizes_per_step else 0
+                max(self.cluster_sizes_per_step[-1])
+                if self.cluster_sizes_per_step
+                else 0
             ),
         }
 
     def visualize_cumulative_topic_count(
-        self, save_path: str = None, show_all_topics: bool = False, title: str = "Cumulative topic and refusal count"
+        self,
+        save_path: str = None,
+        show_all_topics: bool = False,
+        title: str = "Cumulative topic and refusal count",
     ):
         cumulative_generations = torch.cumsum(torch.tensor(self.all_per_step), dim=0)
         cumulative_topics = torch.cumsum(torch.tensor(self.deduped_per_step), dim=0)
@@ -76,9 +106,14 @@ class CrawlerStats:
 
         fig, ax = plt.subplots(figsize=(10, 5))
         plt.grid(zorder=-1)
-        ax.scatter(cumulative_generations, cumulative_topics, label="Unique topics", zorder=10)
         ax.scatter(
-            cumulative_generations, cumulative_refusals, label="Refused unique topics", zorder=10
+            cumulative_generations, cumulative_topics, label="Unique topics", zorder=10
+        )
+        ax.scatter(
+            cumulative_generations,
+            cumulative_refusals,
+            label="Refused unique topics",
+            zorder=10,
         )
         ax.set_xlabel("Total crawled topics")
         ax.set_ylabel("Total crawled topics after filter")
@@ -124,7 +159,9 @@ class CrawlerStats:
         crawler_stats.all_per_step = stats_dict["history"]["all_per_step"]
         crawler_stats.deduped_per_step = stats_dict["history"]["deduped_per_step"]
         crawler_stats.refusal_per_step = stats_dict["history"]["refusal_per_step"]
-        crawler_stats.cluster_sizes_per_step = stats_dict["history"]["cluster_sizes_per_step"]
+        crawler_stats.cluster_sizes_per_step = stats_dict["history"][
+            "cluster_sizes_per_step"
+        ]
         return crawler_stats
 
     def __repr__(self):
@@ -136,7 +173,9 @@ class Crawler:
 
         self.config = crawler_config
         self.queue = TopicQueue()
-        self.head_embedding_CD: Tensor = None  # will be initialized in initialize_head_embeddings
+        self.head_embedding_CD: Tensor = (
+            None  # will be initialized in initialize_head_embeddings
+        )
         # NOTE Model, Tokenizer, are not saved to the Object to reduce overhead
 
         self.stats = CrawlerStats()
@@ -145,13 +184,17 @@ class Crawler:
         self.chinese_pattern = re.compile(r"[\u4e00-\u9fff]")
 
         self.save_filename = save_filename
-        self.save(save_filename)  # Already testing at initialization whether saving works
+        self.save(
+            save_filename
+        )  # Already testing at initialization whether saving works
 
     def _extract_from_numbered_list(self, text: str) -> List[str]:
         """Extract topics from a text that contains a numbered list."""
         extracted_list = self.numbered_list_pattern.findall(text)
         extracted_list = list(dict.fromkeys(extracted_list))  # Remove exact duplicates
-        extracted_list = extracted_list[: self.config.max_extracted_topics_per_generation]
+        extracted_list = extracted_list[
+            : self.config.max_extracted_topics_per_generation
+        ]
         extracted_list = [item for item in extracted_list if item is not None]
         return extracted_list
 
@@ -214,30 +257,44 @@ class Crawler:
                 english_indices.append(i)
 
         # translate the subset with chinese characters in a single batch
-        for batch_start in range(0, len(chinese_topics), self.config.generation_batch_size):
+        for batch_start in range(
+            0, len(chinese_topics), self.config.generation_batch_size
+        ):
             batch_end = batch_start + self.config.generation_batch_size
             chinese_topic_B = chinese_topics[batch_start:batch_end]
             chinese_indices_B = chinese_indices[batch_start:batch_end]
             chinese_raw_B = [t.raw for t in chinese_topic_B]
-            translated_str_B = self._translate_zn_to_en(model_zh_en, tokenizer_zh_en, chinese_raw_B)
-            for original, translation, idx in zip(chinese_raw_B, translated_str_B, chinese_indices_B):
+            translated_str_B = self._translate_zn_to_en(
+                model_zh_en, tokenizer_zh_en, chinese_raw_B
+            )
+            for original, translation, idx in zip(
+                chinese_raw_B, translated_str_B, chinese_indices_B
+            ):
                 topics[idx].english = translation
-                topics[idx].shortened = translation # copy of english
+                topics[idx].shortened = translation  # copy of english
                 topics[idx].chinese = original
 
-        for batch_start in range(0, len(english_topics), self.config.generation_batch_size):
+        for batch_start in range(
+            0, len(english_topics), self.config.generation_batch_size
+        ):
             batch_end = batch_start + self.config.generation_batch_size
             english_topic_B = english_topics[batch_start:batch_end]
             english_indices_B = english_indices[batch_start:batch_end]
             english_raw_B = [t.raw for t in english_topic_B]
-            translated_str_B = self._translate_en_to_zn(model_en_zh, tokenizer_en_zh, english_raw_B)
-            for original, translation, idx in zip(english_raw_B, translated_str_B, english_indices_B):
+            translated_str_B = self._translate_en_to_zn(
+                model_en_zh, tokenizer_en_zh, english_raw_B
+            )
+            for original, translation, idx in zip(
+                english_raw_B, translated_str_B, english_indices_B
+            ):
                 topics[idx].english = original
-                topics[idx].shortened = original # copy of english
+                topics[idx].shortened = original  # copy of english
                 topics[idx].chinese = translation
         return topics
 
-    def _semantic_filter(self, model_spacy_en: Language, topics: List[Topic]) -> List[Topic]:
+    def _semantic_filter(
+        self, model_spacy_en: Language, topics: List[Topic]
+    ) -> List[Topic]:
         # Process in batches using the configured batch size
         for batch_start in range(0, len(topics), self.config.generation_batch_size):
             batch_end = batch_start + self.config.generation_batch_size
@@ -304,14 +361,24 @@ class Crawler:
             topic.shortened = " ".join(words)
         return topics
 
-    def _split_at_comma(self, topics: List[Topic], model_en_zh: AutoModelForSeq2SeqLM, tokenizer_en_zh: AutoTokenizer) -> List[Topic]:
+    def _split_at_comma(
+        self,
+        topics: List[Topic],
+        model_en_zh: AutoModelForSeq2SeqLM,
+        tokenizer_en_zh: AutoTokenizer,
+    ) -> List[Topic]:
         for topic in topics:
             if "," in topic.english:
                 splitted_text = topic.english.split(",")
                 topic.english = splitted_text[0]
                 for item in splitted_text[1:]:
                     topics.append(
-                        Topic(raw=item, english=item, shortened=item, parent_id=topic.parent_id)
+                        Topic(
+                            raw=item,
+                            english=item,
+                            shortened=item,
+                            parent_id=topic.parent_id,
+                        )
                     )
         return topics
 
@@ -331,12 +398,14 @@ class Crawler:
             extracted_items = self._extract_from_numbered_list(gen)
             for item in extracted_items:
                 formatted_topics.append(Topic(raw=item, parent_id=pid))
-            
+
         if len(formatted_topics) == 0:
             print(f"Warning. No topics found in this generation:\n{generations}\n\n")
             return []
 
-        formatted_topics = self._batch_translate_chinese_english_both_ways(model_zh_en, tokenizer_zh_en, model_en_zh, tokenizer_en_zh, formatted_topics)
+        formatted_topics = self._batch_translate_chinese_english_both_ways(
+            model_zh_en, tokenizer_zh_en, model_en_zh, tokenizer_en_zh, formatted_topics
+        )
         self._regex_filter(formatted_topics)
         self._semantic_filter(model_spacy_en, formatted_topics)
         self._remove_words(formatted_topics)
@@ -364,7 +433,9 @@ class Crawler:
         formatted_text = [t.shortened for t in formatted_topics]
 
         with torch.inference_mode(), torch.no_grad():
-            batch_embeddings_BD = compute_embeddings(tokenizer_emb, model_emb, formatted_text)
+            batch_embeddings_BD = compute_embeddings(
+                tokenizer_emb, model_emb, formatted_text
+            )
 
             # Update topic
             for topic, embedding_D in zip(formatted_topics, batch_embeddings_BD):
@@ -397,13 +468,13 @@ class Crawler:
         """
         Finds novel head topics in incoming batch using OpenAI embeddings and updates the self.queue.head_embedding.
         New topics are marked as heads.
-        
+
         Args:
             openai_client: OpenAI client
             openai_emb_model: Name of the OpenAI embedding model to use
             formatted_topics: List of topics to deduplicate
             verbose: Whether to print verbose output
-            
+
         Returns:
             List[Topic]: The input topics with is_head, cluster_idx, and cossim_to_head fields updated
         """
@@ -412,14 +483,16 @@ class Crawler:
                 openai_client=openai_client,
                 openai_emb_model_name=openai_emb_model_name,
             )
-        
+
         if formatted_topics == []:
             return formatted_topics
 
         formatted_text = [t.shortened for t in formatted_topics]
 
         # Compute embeddings using OpenAI API
-        batch_embeddings_BD = batch_compute_openai_embeddings(openai_client, openai_emb_model_name, formatted_text)
+        batch_embeddings_BD = batch_compute_openai_embeddings(
+            openai_client, openai_emb_model_name, formatted_text
+        )
 
         # Update topic
         for topic, embedding_D in zip(formatted_topics, batch_embeddings_BD):
@@ -441,7 +514,7 @@ class Crawler:
             print(f"new head topics (OpenAI):\n")
             for t in new_head_topics:
                 print(f"{t.shortened}\n{t.raw}\n\n")
-        
+
         return formatted_topics
 
     def is_refusal(self, text: str) -> bool:
@@ -475,7 +548,6 @@ class Crawler:
         if selected_topics == []:
             return selected_topics
 
-
         # Prompt the model to generate a diverse, user prompt that asks for assistance for the topic
 
         few_shot_instructions_english = """
@@ -491,7 +563,7 @@ class Crawler:
         Now, this is the topic I need you to formulate a query for:
         Topic: {}
         Query: """
-        
+
         few_shot_instructions_chinese = """
         你是一个帮助用户与语言模型互动的助手。
         用户会提供你一个主题，你需要生成一个多样化的、一句话的查询，询问语言模型对主题的帮助。
@@ -508,18 +580,24 @@ class Crawler:
 
         # Generate the queries
         for topic in selected_topics:
-            instructions = few_shot_instructions_chinese if topic.is_chinese else few_shot_instructions_english
+            instructions = (
+                few_shot_instructions_chinese
+                if topic.is_chinese
+                else few_shot_instructions_english
+            )
             queries = batch_generate(
                 model,
                 tokenizer,
-                [instructions.format(topic.raw)]*6,
+                [instructions.format(topic.raw)] * 6,
                 max_new_tokens=100,
                 temperature=1,
                 verbose=verbose,
             )
 
             refused_to_make_query = [self.is_refusal(query) for query in queries]
-            make_query_majority_refusal = (sum(refused_to_make_query) / len(refused_to_make_query)) > 0.5
+            make_query_majority_refusal = (
+                sum(refused_to_make_query) / len(refused_to_make_query)
+            ) > 0.5
             if verbose:
                 print(f"make_query_majority_refusal: {make_query_majority_refusal}")
                 print(f"queries: {queries}")
@@ -536,16 +614,22 @@ class Crawler:
                     max_new_tokens=100,
                     temperature=1,
                 )
-                refused_to_answer_query = [self.is_refusal(answer) for answer in answers]
-                make_answer_majority_refusal = (sum(refused_to_answer_query) / len(refused_to_answer_query)) > 0.5
+                refused_to_answer_query = [
+                    self.is_refusal(answer) for answer in answers
+                ]
+                make_answer_majority_refusal = (
+                    sum(refused_to_answer_query) / len(refused_to_answer_query)
+                ) > 0.5
                 if verbose:
-                    print(f"make_answer_majority_refusal: {make_answer_majority_refusal}")
+                    print(
+                        f"make_answer_majority_refusal: {make_answer_majority_refusal}"
+                    )
                     print(f"answers: {answers}")
 
                 topic.responses = answers
                 if make_answer_majority_refusal:
                     topic.is_refusal = True
-                    
+
         return selected_topics
 
         # head_topics_raw = [t.raw for t in selected_topics if t.is_head]
@@ -603,7 +687,9 @@ class Crawler:
         for batch_start in trange(
             0, len(topics), self.config.generation_batch_size, desc="Checking refusals"
         ):
-            batch_topics = topics[batch_start : batch_start + self.config.generation_batch_size]
+            batch_topics = topics[
+                batch_start : batch_start + self.config.generation_batch_size
+            ]
             topics = self.check_refusal(
                 model,
                 tokenizer,
@@ -627,11 +713,19 @@ class Crawler:
         for i, topic_str in enumerate(initial_topics):
             is_chinese = self._has_chinese(topic_str)
             if is_chinese:
-                topic_english = self._translate_zn_to_en(filter_models["model_zh_en"], filter_models["tokenizer_zh_en"], topic_str)
+                topic_english = self._translate_zn_to_en(
+                    filter_models["model_zh_en"],
+                    filter_models["tokenizer_zh_en"],
+                    topic_str,
+                )
                 topic_chinese = topic_str
             else:
                 topic_english = topic_str
-                topic_chinese = self._translate_en_to_zn(filter_models["model_en_zh"], filter_models["tokenizer_en_zh"], topic_str)
+                topic_chinese = self._translate_en_to_zn(
+                    filter_models["model_en_zh"],
+                    filter_models["tokenizer_en_zh"],
+                    topic_str,
+                )
             topics.append(
                 Topic(
                     raw=topic_str,
@@ -660,7 +754,9 @@ class Crawler:
                 )
         return topics
 
-    def initialize_head_embeddings(self, model_emb: AutoModel, tokenizer_emb: AutoTokenizer):
+    def initialize_head_embeddings(
+        self, model_emb: AutoModel, tokenizer_emb: AutoTokenizer
+    ):
         hidden_size = model_emb.config.hidden_size
         device = model_emb.device
         self.head_embedding_CD = torch.zeros(
@@ -670,17 +766,20 @@ class Crawler:
             0, self.queue.num_head_topics, self.config.load_embedding_batch_size
         ):
             batch_end = min(
-                batch_start + self.config.load_embedding_batch_size, self.queue.num_head_topics
+                batch_start + self.config.load_embedding_batch_size,
+                self.queue.num_head_topics,
             )
             batch_topics = self.queue.head_topics[batch_start:batch_end]
-           
+
             batch_embeddings = compute_embeddings(
                 tokenizer_emb, model_emb, [t.english for t in batch_topics]
             )
-            self.head_embedding_CD = torch.cat((self.head_embedding_CD, batch_embeddings), dim=0)
+            self.head_embedding_CD = torch.cat(
+                (self.head_embedding_CD, batch_embeddings), dim=0
+            )
 
     def initialize_head_embeddings_oai(self, openai_client, openai_emb_model_name):
-        hidden_size = 1536 # TODO make this a variable that is automatically set
+        hidden_size = 1536  # TODO make this a variable that is automatically set
         self.head_embedding_CD = torch.zeros(
             0, hidden_size, device=self.config.device
         )  # [num_head_topics, hidden_size]
@@ -688,16 +787,19 @@ class Crawler:
             0, self.queue.num_head_topics, self.config.load_embedding_batch_size
         ):
             batch_end = min(
-                batch_start + self.config.load_embedding_batch_size, self.queue.num_head_topics
+                batch_start + self.config.load_embedding_batch_size,
+                self.queue.num_head_topics,
             )
             batch_topics = self.queue.head_topics[batch_start:batch_end]
             batch_embeddings = batch_compute_openai_embeddings(
                 openai_client=openai_client,
                 openai_emb_model_name=openai_emb_model_name,
-                words=[t.english for t in batch_topics]
+                words=[t.english for t in batch_topics],
             )
             batch_embeddings = batch_embeddings.to(self.config.device)
-            self.head_embedding_CD = torch.cat((self.head_embedding_CD, batch_embeddings), dim=0)
+            self.head_embedding_CD = torch.cat(
+                (self.head_embedding_CD, batch_embeddings), dim=0
+            )
 
     def crawl(
         self,
@@ -725,7 +827,9 @@ class Crawler:
         else:
             topic_seed_candidates = self.queue.head_topics
 
-        for crawl_step_idx in trange(self.config.num_crawl_steps, desc="Crawling topics"):
+        for crawl_step_idx in trange(
+            self.config.num_crawl_steps, desc="Crawling topics"
+        ):
             # Get batch of topics
             if crawl_step_idx < self.config.seed_warmup_steps:
                 batch_topics = []
@@ -749,7 +853,9 @@ class Crawler:
                     batch_topics_text = [t.chinese for t in batch_topics]
                 else:
                     raise ValueError(f"Invalid language: {lang}")
-                parent_ids = [t.id for t in batch_topics] * self.config.num_samples_per_topic
+                parent_ids = [
+                    t.id for t in batch_topics
+                ] * self.config.num_samples_per_topic
 
                 # Empty batch condition
                 if batch_topics_text == []:
@@ -764,9 +870,13 @@ class Crawler:
 
                 is_seed_warmup = crawl_step_idx < self.config.seed_warmup_steps
                 if is_seed_warmup:
-                    thinking_message = self.config.crawler_thinking_messages[lang][crawl_step_idx]
+                    thinking_message = self.config.crawler_thinking_messages[lang][
+                        crawl_step_idx
+                    ]
                 else:
-                    thinking_message = random.choice(self.config.crawler_thinking_messages[lang])
+                    thinking_message = random.choice(
+                        self.config.crawler_thinking_messages[lang]
+                    )
 
                 print(f"\n## generating...")
                 # Choose the correct prefill based on the model
@@ -776,13 +886,13 @@ class Crawler:
                     template = "{}"
                     prefills = {
                         "user_suffix": thinking_message,
-                        "assistant_prefill": "1. "
+                        "assistant_prefill": "1. ",
                     }
                     max_new_tokens = self.config.max_generated_tokens
                 elif prompt_injection_location == "user_suffix":
                     prefills = {
                         "user_suffix": thinking_message,
-                        "assistant_prefill": "1. "
+                        "assistant_prefill": "1. ",
                     }
                     max_new_tokens = self.config.max_generated_tokens
                 elif prompt_injection_location == "assistant_prefix":
@@ -798,9 +908,11 @@ class Crawler:
                         "assistant_prefill": "",
                         "thinking_message": "",
                     }
-                    max_new_tokens = 2048 # Generate as long as wanted
+                    max_new_tokens = 2048  # Generate as long as wanted
                 else:
-                    raise ValueError(f"Invalid prompt injection location: {prompt_injection_location}")
+                    raise ValueError(
+                        f"Invalid prompt injection location: {prompt_injection_location}"
+                    )
 
                 generated_texts = batch_generate(
                     model,
@@ -823,11 +935,15 @@ class Crawler:
                     prefilled_texts = []
                     for gen in generated_texts:
                         if "</think>" in gen:
-                            gen = gen.split("</think>")[0] # Only keep the text until </think>
-                            gen = gen + "</think>\n\n" + thinking_message + "\n1. " # Prefill the generated text
+                            gen = gen.split("</think>")[
+                                0
+                            ]  # Only keep the text until </think>
+                            gen = (
+                                gen + "</think>\n\n" + thinking_message + "\n1. "
+                            )  # Prefill the generated text
                             prefilled_texts.append(gen)
                         else:
-                            pass # dont use topics that lack a complete thinking process
+                            pass  # dont use topics that lack a complete thinking process
                     generated_texts = batch_complete_R1(
                         model=model,
                         tokenizer=tokenizer,
@@ -885,10 +1001,32 @@ class Crawler:
                         )
                         # Record memory usage
 
-                gpu_handle = nvmlDeviceGetHandleByIndex(0)
-                gpu_info = nvmlDeviceGetMemoryInfo(gpu_handle)
-                print(f"GPU Memory: {(gpu_info.used / 1024**2):.1f} MB")
-                print(f"RAM Usage: {(psutil.Process().memory_info().rss / 1024**2):.1f} MB")
+                gpu_memory_used_gb = 0
+                if nvml_available:
+                    try:
+                        gpu_handle = nvmlDeviceGetHandleByIndex(0)
+                        gpu_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+                        gpu_memory_used_gb = gpu_info.used / (
+                            1024**3
+                        )  # Convert bytes to GB
+                    except NVMLError as e:
+                        print(f"Could not get GPU memory info: {e}")
+                else:
+                    pass  # NVML not available, GPU info skipped
+
+                # CPU memory
+                process = psutil.Process(os.getpid())
+                memory_info_bytes = process.memory_info().rss
+
+                # Save memory info
+                memory_usage = {
+                    "cpu_memory_used_gb": memory_info_bytes
+                    / (1024**3),  # Convert bytes to GB
+                    "gpu_memory_used_gb": gpu_memory_used_gb,
+                }
+
+                print(f"GPU Memory: {gpu_memory_used_gb:.1f} GB")
+                print(f"RAM Usage: {memory_usage['cpu_memory_used_gb']:.1f} GB")
 
                 # Log stats
                 self.stats.log_step(
@@ -932,7 +1070,10 @@ class Crawler:
         crawler.stats = CrawlerStats.load(crawler_dict["stats"])
         return crawler
 
-def get_run_name(model_path: str, crawler_config: CrawlerConfig, prompt_injection_location: str):
+
+def get_run_name(
+    model_path: str, crawler_config: CrawlerConfig, prompt_injection_location: str
+):
     model_name = model_path.split("/")[-1]
     run_name = (
         "crawler_log"

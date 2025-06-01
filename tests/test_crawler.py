@@ -5,7 +5,7 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from core.crawler import Crawler
 from core.crawler_config import CrawlerConfig
 from core.topic_queue import Topic
-from core.model_utils import load_zh_en_translation_model
+from core.llm_utils import load_zh_en_translation_model
 from core.project_config import CACHE_DIR, DEVICE
 
 
