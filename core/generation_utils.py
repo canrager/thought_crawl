@@ -239,8 +239,8 @@ def batch_generate(
 
     if isinstance(model, str):
         assert (
-            "claude" in model or "grok" in model
-        ), f"Model {model} must be either a loaded hf model or 'claude'"
+            any(keyword in model for keyword in ["claude", "grok"])
+        ), f"Model {model} must be either a loaded hf model or 'claude' or 'grok'"
         prompts = [user_message_template.format(topic) for topic in selected_topics]
         if thinking_message != "":
             system_prompt = "Organize your thoughts within XML tags using <think> </think> before responding."
@@ -475,7 +475,6 @@ def query_llm_api(
         )
     elif "grok" in model_name:
         temperature = 1
-        # assistant_prefill is not used in query_grok as per its implementation
         with open(os.path.join(INPUT_DIR, "grok.txt"), "r") as f:
             api_key = f.read()
         return query_grok(
@@ -648,6 +647,8 @@ def query_grok(
     for attempt in range(max_retries):
         if verbose:
             print(f"\nAttempt {attempt + 1}/{max_retries} for Grok API")
+            print("-" * 40)
+            print(f"Messages: {messages}")
             print("-" * 40)
 
         try:

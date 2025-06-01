@@ -24,7 +24,6 @@ nohup python exp/run_crawler.py \
     --model_path "grok-3" \
     --cache_dir "/Users/canrager/Desktop" \
     --prompt_injection_location "thought_prefix" \
-    --debug \
     --device "cpu" \
     > "$LOG_FILE" 2>&1 &
 
