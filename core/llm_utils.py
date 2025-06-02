@@ -5,6 +5,7 @@ import torch
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
+    Gemma3ForCausalLM,
     BitsAndBytesConfig,
     AutoModelForSeq2SeqLM,
     AutoModel,
@@ -14,7 +15,7 @@ from core.project_config import INPUT_DIR, MODELS_DIR
 import spacy
 
 
-def load_model(
+def load_model_and_tokenizer(
     model_name: str,
     cache_dir: str,
     device: str,
@@ -63,20 +64,19 @@ def load_model(
     else:
         device_map = device
     # # Standard way
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch_dtype,
-        device_map=device_map,
-        quantization_config=quantization_config,
-        cache_dir=cache_dir,
-    )
-    # Path specific way
-    # model = AutoModelForCausalLM.from_pretrained(
-    #     pretrained_model_name_or_path=os.path.join(cache_dir, model_name),
-    #     torch_dtype=torch_dtype,
-    #     device_map=device,
-    #     quantization_config=quantization_config,
-    # )
+
+    from_pretrained_kwargs = {
+        "pretrained_model_name_or_path": model_name,
+        "torch_dtype": torch_dtype,
+        "device_map": device_map,
+        "quantization_config": quantization_config,
+        "cache_dir": cache_dir,
+    }
+
+    if "gemma-3" in model_name:
+        model = Gemma3ForCausalLM.from_pretrained(**from_pretrained_kwargs)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(**from_pretrained_kwargs)
 
     # Optimize for inference
     model.eval()

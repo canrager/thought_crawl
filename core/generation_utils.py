@@ -238,8 +238,8 @@ def batch_generate(
     generated_texts = []
 
     if isinstance(model, str):
-        assert (
-            any(keyword in model for keyword in ["claude", "grok"])
+        assert any(
+            keyword in model for keyword in ["claude", "grok"]
         ), f"Model {model} must be either a loaded hf model or 'claude' or 'grok'"
         prompts = [user_message_template.format(topic) for topic in selected_topics]
         if thinking_message != "":
@@ -285,19 +285,18 @@ def batch_generate(
             )
             generated_texts.extend(batch_generations)
     else:
-        with torch.inference_mode(), torch.autocast(device_type=model.device.type):
-            for _ in range(num_samples_per_topic):
-                batch_generations = batch_generate_from_tokens(
-                    model=model,
-                    tokenizer=tokenizer,
-                    input_ids_BL=input_ids,
-                    max_generation_length=None,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    skip_special_tokens=skip_special_tokens,
-                    verbose=False,
-                )
-                generated_texts.extend(batch_generations)
+        for _ in range(num_samples_per_topic):
+            batch_generations = batch_generate_from_tokens(
+                model=model,
+                tokenizer=tokenizer,
+                input_ids_BL=input_ids,
+                max_generation_length=None,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                skip_special_tokens=skip_special_tokens,
+                verbose=False,
+            )
+            generated_texts.extend(batch_generations)
 
     if verbose:
         input_tokens = custom_decoding(
@@ -466,7 +465,10 @@ def query_llm_api(
             temperature,
         )
     elif "gpt" in model_name:
-        assert assistant_prefill is "", "Assistant prefill is not supported for GPT"
+        assert assistant_prefill == "", (
+            "Assistant prefill is not supported for GPT. Argument assistant_prefill is: "
+            + assistant_prefill
+        )
         temperature = 1
         with open(os.path.join(INPUT_DIR, "oai.txt"), "r") as f:
             api_key = f.read()

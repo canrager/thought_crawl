@@ -3,7 +3,7 @@ import torch
 
 from core.crawler import Crawler, get_run_name
 from core.crawler_config import CrawlerConfig
-from core.llm_utils import load_model, load_filter_models, load_from_path
+from core.llm_utils import load_model_and_tokenizer, load_filter_models, load_from_path
 from core.project_config import INTERIM_DIR, RESULT_DIR
 import argparse
 
@@ -103,7 +103,7 @@ if __name__ == "__main__":
 
     # Initialize models
     if not any(keyword in args.model_path for keyword in ["claude", "grok"]):
-        model_crawl, tokenizer_crawl = load_model(
+        model_crawl, tokenizer_crawl = load_model_and_tokenizer(
             args.model_path,
             device=args.device,
             cache_dir=args.cache_dir,

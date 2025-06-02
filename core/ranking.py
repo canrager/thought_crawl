@@ -8,7 +8,7 @@ import json
 import os
 import torch
 from core.generation_utils import batch_generate
-from core.llm_utils import load_model
+from core.llm_utils import load_model_and_tokenizer
 from core.project_config import RESULT_DIR
 from core.ranking_eval import RankingTracker
 
@@ -25,7 +25,7 @@ DEFAULT_RANKING_CONFIG = {
     "trueskill_beta": 166.667,
     "trueskill_tau": 1.0,
     "seed": 42,
-    "ranking_methods": ["elo"] # ["wincount", "elo", "trueskill"]
+    "ranking_methods": ["elo"],  # ["wincount", "elo", "trueskill"]
 }
 
 DEBUG_RANKING_CONFIG = {
@@ -40,8 +40,9 @@ DEBUG_RANKING_CONFIG = {
     "trueskill_beta": 166.667,
     "trueskill_tau": 1.0,
     "seed": 42,
-    "ranking_methods": ["elo"] # ["wincount", "elo", "trueskill"]
+    "ranking_methods": ["elo"],  # ["wincount", "elo", "trueskill"]
 }
+
 
 @dataclass
 class TrueSkillRating:
@@ -82,7 +83,9 @@ class WinCountRanking(RankingSystem):
 class EloRanking(RankingSystem):
     """Elo rating system"""
 
-    def __init__(self, topics: List[str], initial_rating: float = 1000, k_factor: float = 32):
+    def __init__(
+        self, topics: List[str], initial_rating: float = 1000, k_factor: float = 32
+    ):
         super().__init__(topics)
         self.ratings = {topic: initial_rating for topic in topics}
         self.k_factor = k_factor
@@ -119,12 +122,12 @@ class TrueSkillRanking(RankingSystem):
         self.tau = tau
 
     def _v(self, t: float) -> float:
-       """Compute v = norm.pdf(t) / (norm.cdf(t) + ε)"""
-       return norm.pdf(t) / (norm.cdf(t) + 1e-6)
+        """Compute v = norm.pdf(t) / (norm.cdf(t) + ε)"""
+        return norm.pdf(t) / (norm.cdf(t) + 1e-6)
 
     def _w(self, t: float, v: float) -> float:
-       """Compute w = v * (v + t)"""
-       return v * (v + t)
+        """Compute w = v * (v + t)"""
+        return v * (v + t)
 
     def update(self, winner: str, loser: str, draw: bool = False):
         # Unpack ratings
@@ -164,7 +167,7 @@ class TrueSkillRanking(RankingSystem):
         self.ratings[loser] = TrueSkillRating(mu=mu_loser_new, sigma=sigma_loser_new)
 
         self.update_counts(winner, loser)
-    
+
     def get_final_ranking(self) -> List[Tuple[str, float]]:
         # Sort by conservative rating (mu - 3*sigma)
         ratings_dict = [(t, r.mu) for t, r in self.ratings.items()]
@@ -222,7 +225,7 @@ def run_parallel_ranking_experiment(
 
         # Shuffle the topics first
         all_pairs = []
-        num_batches = int(num_comparisons/(len(topics)//2))
+        num_batches = int(num_comparisons / (len(topics) // 2))
         for _ in range(num_batches):
             shuffled_topics = list(topics)
             random.shuffle(shuffled_topics)
@@ -283,15 +286,16 @@ def run_parallel_ranking_experiment(
 
     return final_rankings, metadata
 
+
 def setup_ranking_experiment(
-        topic_dicts: Dict[str, Dict],
-        run_title: str,
-        model_name: str,
-        device: str,
-        cache_dir: str,
-        config: Dict = None,
-        force_recompute: bool = False,
-        debug: bool = False
+    topic_dicts: Dict[str, Dict],
+    run_title: str,
+    model_name: str,
+    device: str,
+    cache_dir: str,
+    config: Dict = None,
+    force_recompute: bool = False,
+    debug: bool = False,
 ):
     """Setup ranking experiment for clustered topics."""
 
@@ -304,20 +308,18 @@ def setup_ranking_experiment(
     elif config:
         ranking_config = config
     else:
-        ranking_config = DEFAULT_RANKING_CONFIG 
-    
+        ranking_config = DEFAULT_RANKING_CONFIG
+
     # Set random seeds
     random.seed(ranking_config["seed"])
     torch.manual_seed(ranking_config["seed"])
-    
+
     # Load model and tokenizer
     print(f"Loading model {model_name}...")
-    model, tokenizer = load_model(
-        model_name,
-        device=device,
-        cache_dir=cache_dir
+    model, tokenizer = load_model_and_tokenizer(
+        model_name, device=device, cache_dir=cache_dir
     )
-    
+
     # Initialize ranking systems based on config
     ranking_systems = {}
     if "wincount" in ranking_config["ranking_methods"]:
@@ -326,7 +328,7 @@ def setup_ranking_experiment(
         ranking_systems["elo"] = EloRanking(
             topics,
             initial_rating=ranking_config["elo_initial_rating"],
-            k_factor=ranking_config["elo_k_factor"]
+            k_factor=ranking_config["elo_k_factor"],
         )
     if "trueskill" in ranking_config["ranking_methods"]:
         ranking_systems["trueskill"] = TrueSkillRanking(
@@ -334,12 +336,12 @@ def setup_ranking_experiment(
             mu=ranking_config["trueskill_mu"],
             sigma=ranking_config["trueskill_sigma"],
             beta=ranking_config["trueskill_beta"],
-            tau=ranking_config["trueskill_tau"]
+            tau=ranking_config["trueskill_tau"],
         )
-    
+
     # Initialize trackers
     trackers = {name: RankingTracker(topics) for name in ranking_systems.keys()}
-    
+
     # Run ranking experiment
     final_rankings, metadata = run_parallel_ranking_experiment(
         topics=topics,
@@ -349,9 +351,9 @@ def setup_ranking_experiment(
         trackers=trackers,
         num_comparisons=ranking_config["num_comparisons"],
         batch_size=ranking_config["batch_size"],
-        use_balanced_pairs=ranking_config["use_balanced_pairs"]
+        use_balanced_pairs=ranking_config["use_balanced_pairs"],
     )
-    
+
     # Format results
     for method, ranking in final_rankings.items():
         for rank_idx, (topic, score) in enumerate(ranking):
@@ -362,12 +364,13 @@ def setup_ranking_experiment(
             topic_dicts[topic]["ranking"][method] = {
                 "rank_idx": rank_idx,
                 "rank_score": float(score),
-                "num_comparisons": metadata[method]["ranking_counts"][topic]
+                "num_comparisons": metadata[method]["ranking_counts"][topic],
             }
-    
+
     del model, tokenizer
 
     return topic_dicts
+
 
 def rank_clustered_topics(
     run_title: str,
@@ -376,21 +379,23 @@ def rank_clustered_topics(
     cache_dir: str,
     config: Dict = None,
     force_recompute: bool = False,
-    debug: bool = False
+    debug: bool = False,
 ) -> Dict[str, Dict[int, Dict[str, Any]]]:
     """Rank clustered topics using specified ranking methods."""
 
     # Optionally load pre-ranked topics
     save_dir = os.path.join(RESULT_DIR, f"topics_clustered_ranked_{run_title}.json")
     if os.path.exists(save_dir) and not force_recompute:
-        print(f"Loading the ranked, aggregated topics, since they already exist at: {save_dir}")
+        print(
+            f"Loading the ranked, aggregated topics, since they already exist at: {save_dir}"
+        )
         return json.load(open(save_dir, "r"))
-    
+
     clusters_dir = os.path.join(RESULT_DIR, f"topics_clustered_{run_title}.json")
     if not os.path.exists(clusters_dir):
         raise FileNotFoundError(f"Topic clusters not found at: {clusters_dir}")
     clusters = json.load(open(clusters_dir, "r"))
-    
+
     # Run ranking experiment
     ranking_results = setup_ranking_experiment(
         topic_dicts=clusters,
@@ -400,15 +405,16 @@ def rank_clustered_topics(
         cache_dir=cache_dir,
         config=config,
         force_recompute=force_recompute,
-        debug=debug
+        debug=debug,
     )
-    
+
     # Save results
     output_file = os.path.join(RESULT_DIR, f"topics_clustered_ranked_{run_title}.json")
     with open(output_file, "w") as f:
         json.dump(ranking_results, f, indent=2)
-    
+
     return ranking_results
+
 
 def rank_individual_topics(
     run_title: str,
@@ -418,21 +424,26 @@ def rank_individual_topics(
     cache_dir: str,
     config: Dict = None,
     force_recompute: bool = False,
-    debug: bool = False
+    debug: bool = False,
 ) -> Dict[str, Dict[int, Dict[str, Any]]]:
     """Rank individual topics using specified ranking methods."""
 
     # Optionally load pre-ranked topics
     save_dir = os.path.join(RESULT_DIR, f"topics_ranked_{run_title}.json")
     if os.path.exists(save_dir) and not force_recompute:
-        print(f"Loading the ranked, aggregated topics, since they already exist at: {save_dir}")
+        print(
+            f"Loading the ranked, aggregated topics, since they already exist at: {save_dir}"
+        )
         return json.load(open(save_dir, "r"))
-    
+
     # Run ranking experiment
     topic_dicts = crawl_data["queue"]["topics"]["head_refusal_topics"]
-    topic_dicts = {t["raw"]: {
-        "first_occurence_id": t["id"],
-    } for t in topic_dicts}
+    topic_dicts = {
+        t["raw"]: {
+            "first_occurence_id": t["id"],
+        }
+        for t in topic_dicts
+    }
 
     ranking_results = setup_ranking_experiment(
         topic_dicts=topic_dicts,
@@ -442,7 +453,7 @@ def rank_individual_topics(
         cache_dir=cache_dir,
         config=config,
         force_recompute=force_recompute,
-        debug=debug
+        debug=debug,
     )
 
     # Save results
@@ -451,6 +462,7 @@ def rank_individual_topics(
         json.dump(ranking_results, f, indent=2)
 
     return ranking_results
+
 
 def rank_topics(
     run_title: str,
@@ -461,13 +473,24 @@ def rank_topics(
     crawl_data: Optional[Dict] = None,
     config: Dict = None,
     force_recompute: bool = False,
-    debug: bool = False
+    debug: bool = False,
 ) -> Dict[str, Dict[int, Dict[str, Any]]]:
     """Rank topics using specified ranking methods."""
 
     if ranking_mode == "clustered":
-        return rank_clustered_topics(run_title, model_name, device, cache_dir, config, force_recompute, debug)
+        return rank_clustered_topics(
+            run_title, model_name, device, cache_dir, config, force_recompute, debug
+        )
     elif ranking_mode == "individual":
-        return rank_individual_topics(run_title, crawl_data, model_name, device, cache_dir, config, force_recompute, debug)
+        return rank_individual_topics(
+            run_title,
+            crawl_data,
+            model_name,
+            device,
+            cache_dir,
+            config,
+            force_recompute,
+            debug,
+        )
     else:
         raise ValueError(f"Invalid ranking mode: {ranking_mode}")

@@ -1,17 +1,13 @@
-!**/.gitkeep
-
 # Environment
 __pycache__/
 *.lock
 
-# Directories
-artifacts
-exp/prototypes
-
-!artifacts/.gitkeep
 !artifacts/input/.gitkeep
 !artifacts/interim/.gitkeep
 !artifacts/result/.gitkeep
 !artifacts/log/.gitkeep
 !exp/prototypes/.gitkeep
 
+# Directories
+artifacts
+exp/prototypes
