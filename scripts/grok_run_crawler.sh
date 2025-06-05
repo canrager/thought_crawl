@@ -13,7 +13,7 @@ cd $PROJECT_ROOT
 
 # Create artifacts/log directory if it doesn't exist
 mkdir -p "$PROJECT_ROOT/artifacts/log"
-# Generate timestamp for log filename
+# Generate time./schr   stamp for log filename
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="$PROJECT_ROOT/artifacts/log/crawler_debug_${TIMESTAMP}.log"
 
@@ -21,11 +21,10 @@ echo "Log Dir: $LOG_FILE"
 
 # Run the crawler script with nohup and write to the log file
 nohup python exp/run_crawler.py \
-    --device "cuda:0" \
-    --cache_dir "/home/can/models/" \
-    --model_path "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B" \
-    --quantization_bits "none" \
+    --model_path "grok-3" \
+    --cache_dir "/Users/canrager/Desktop" \
     --prompt_injection_location "thought_prefix" \
+    --device "cpu" \
     > "$LOG_FILE" 2>&1 &
 
 # Store the process ID

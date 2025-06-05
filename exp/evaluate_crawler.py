@@ -334,11 +334,11 @@ if __name__ == "__main__":
             model_name="mistralai/Mistral-Small-24B-Instruct-2501"
         ),
         CrawlName(
-            title="deepseek-r1-0528-qwen3-8b",
-            path="crawler_log_20250602_072604_DeepSeek-R1-0528-Qwen3-8B_1samples_1000crawls_Truefilter_thought_prefixprompt_qNone.json",
+            title="deepseek-r1-0605-llama-8b",
+            path="crawler_log_20250605_030457_DeepSeek-R1-Distill-Llama-8B_1samples_1000crawls_Truefilter_thought_prefixprompt_qNone.json",
             acronym="D",
-            plot_label="DeepSeek-R1-0528-Qwen3-8B",
-            model_name="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+            plot_label="DeepSeek-R1-0605-Llama-8B",
+            model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
         ),
     ]
     all_crawl_names_dict = {name.title: name for name in all_crawl_names}
@@ -392,7 +392,7 @@ if __name__ == "__main__":
         # "0508-claude-haiku-thought-prefix"
         # "0206-gemma3-12b-thought-prefix-qNone"
         # "0603-mistral-thought-prefix-q8"
-        "deepseek-r1-0528-qwen3-8b"
+        "deepseek-r1-0605-llama-8b"
     ]
 
     gt_fnames = {

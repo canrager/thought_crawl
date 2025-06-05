@@ -2,7 +2,7 @@
 name = "thought_crawl"
 version = "0.1.0"
 description = ""
-authors = ["Anonymous"]
+authors = ["Can Rager"]
 packages = [{include = "exp"}, {include = "core"}]
 
 [tool.poetry.dependencies]

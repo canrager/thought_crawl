@@ -20,12 +20,18 @@ LOG_FILE="$PROJECT_ROOT/artifacts/log/crawler_debug_${TIMESTAMP}.log"
 echo "Log Dir: $LOG_FILE"
 
 # Run the crawler script with nohup and write to the log file
+# Set environment variables to disable TorchDynamo before importing torch
+# This needs to be done before any torch imports for gemma3 models
+export TORCH_COMPILE_DISABLE=1
+export TORCHDYNAMO_DISABLE=1
+
 nohup python exp/run_crawler.py \
     --device "cuda:0" \
     --cache_dir "/home/can/models/" \
-    --model_path "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B" \
+    --model_path "google/gemma-3-12b-it" \
     --quantization_bits "none" \
     --prompt_injection_location "thought_prefix" \
+    "$@" \
     > "$LOG_FILE" 2>&1 &
 
 # Store the process ID

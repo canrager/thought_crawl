@@ -23,9 +23,10 @@ echo "Log Dir: $LOG_FILE"
 nohup python exp/run_crawler.py \
     --device "cuda:0" \
     --cache_dir "/home/can/models/" \
-    --model_path "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B" \
+    --model_path "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" \
     --quantization_bits "none" \
     --prompt_injection_location "thought_prefix" \
+    "$@" \
     > "$LOG_FILE" 2>&1 &
 
 # Store the process ID
