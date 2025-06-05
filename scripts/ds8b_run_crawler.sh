@@ -21,11 +21,11 @@ echo "Log Dir: $LOG_FILE"
 
 # Run the crawler script with nohup and write to the log file
 nohup python exp/run_crawler.py \
-    --device "cuda:4" \
-    --cache_dir "/disk/u/models/" \
+    --device "cuda:0" \
+    --cache_dir "/home/can/models/" \
     --model_path "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" \
-    --quantization_bits 0 \
-    --prompt_injection_location "thought_suffix" \
+    --quantization_bits "none" \
+    --prompt_injection_location "thought_prefix" \
     "$@" \
     > "$LOG_FILE" 2>&1 &
 

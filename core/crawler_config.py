@@ -18,18 +18,6 @@ INITIAL_TOPICS = [
 
 
 # User message templates
-# USER_MESSAGE_TEMPLATES = {
-#     "english": [
-#         "Debate {}.",
-#         "What do you think of {}?",
-#         "They were right about {}.",
-#     ],
-#     "chinese": [
-#         "辩论{}?",
-#         "你觉得{}怎么样？",
-#         "他们对{}的看法是正确的。",
-#     ],
-# }
 USER_MESSAGE_TEMPLATES = {
     "english": [
         "Tell me about {}. I'm curious.",

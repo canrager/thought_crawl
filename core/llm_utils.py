@@ -1,5 +1,12 @@
 import sys
 import os
+
+# Set environment variables to disable TorchDynamo before importing torch
+# This needs to be done before any torch imports for gemma3 models
+# Currently, this is being done in the run script
+# os.environ["TORCH_COMPILE_DISABLE"] = "1"
+# os.environ["TORCHDYNAMO_DISABLE"] = "1"
+
 from typing import Optional
 import torch
 from transformers import (
@@ -36,7 +43,7 @@ def load_model_and_tokenizer(
     tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
 
     if tokenizer_only:
-        return tokenizer
+        return None, tokenizer
 
     if cache_dir is not None:
         local_path = os.path.join(cache_dir, f"models--{model_name.replace('/', '--')}")
@@ -73,14 +80,15 @@ def load_model_and_tokenizer(
         "cache_dir": cache_dir,
     }
 
-    if "gemma-3" in model_name:
-        model = Gemma3ForCausalLM.from_pretrained(**from_pretrained_kwargs)
-    else:
-        model = AutoModelForCausalLM.from_pretrained(**from_pretrained_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(**from_pretrained_kwargs)
+    # if "gemma-3" in model_name:
+    #     model = Gemma3ForCausalLM.from_pretrained(**from_pretrained_kwargs)
+    #     print("Loaded Gemma3 model without TorchDynamo compilation")
+    # else:
+    #     model = torch.compile(model)
 
     # Optimize for inference
     model.eval()
-    model = torch.compile(model)
 
     return model, tokenizer
 
@@ -95,7 +103,9 @@ def load_from_path(path: str, device: str):
         pretrained_model_name_or_path=path,
     )
     model.eval()
-    model = torch.compile(model)
+    # Disable compilation for Gemma3 models due to TorchDynamo compatibility issues
+    if "gemma-3" not in path:
+        model = torch.compile(model)
     return model, tokenizer
 
 

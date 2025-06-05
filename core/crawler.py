@@ -19,13 +19,6 @@ from transformers import (
     AutoModel,
 )
 from spacy.language import Language
-import psutil
-from pynvml import (
-    nvmlInit,
-    nvmlDeviceGetHandleByIndex,
-    nvmlDeviceGetMemoryInfo,
-    NVMLError,
-)
 
 from core.generation_utils import (
     batch_generate,
@@ -39,13 +32,7 @@ from core.tokenization_utils import match_chat_template
 
 EPS = 1e-10
 
-nvml_available = False
-try:
-    nvmlInit()
-    nvml_available = True
-    print("NVML initialized successfully.")
-except NVMLError as e:
-    print(f"NVML initialization failed: {e}. GPU monitoring will be disabled.")
+
 
 
 class CrawlerStats:
@@ -928,8 +915,6 @@ class Crawler:
                     **prefills,
                 )
 
-                print(f"pre suffixing: {generated_texts}")
-
                 # Post-generation prefilling
                 if prompt_injection_location == "thought_suffix":
                     prefilled_texts = []
@@ -1000,33 +985,6 @@ class Crawler:
                             f"new topic from crawl step {crawl_step_idx}:\n{topic.english}\n{topic.raw}\n\n"
                         )
                         # Record memory usage
-
-                gpu_memory_used_gb = 0
-                if nvml_available:
-                    try:
-                        gpu_handle = nvmlDeviceGetHandleByIndex(0)
-                        gpu_info = nvmlDeviceGetMemoryInfo(gpu_handle)
-                        gpu_memory_used_gb = gpu_info.used / (
-                            1024**3
-                        )  # Convert bytes to GB
-                    except NVMLError as e:
-                        print(f"Could not get GPU memory info: {e}")
-                else:
-                    pass  # NVML not available, GPU info skipped
-
-                # CPU memory
-                process = psutil.Process(os.getpid())
-                memory_info_bytes = process.memory_info().rss
-
-                # Save memory info
-                memory_usage = {
-                    "cpu_memory_used_gb": memory_info_bytes
-                    / (1024**3),  # Convert bytes to GB
-                    "gpu_memory_used_gb": gpu_memory_used_gb,
-                }
-
-                print(f"GPU Memory: {gpu_memory_used_gb:.1f} GB")
-                print(f"RAM Usage: {memory_usage['cpu_memory_used_gb']:.1f} GB")
 
                 # Log stats
                 self.stats.log_step(

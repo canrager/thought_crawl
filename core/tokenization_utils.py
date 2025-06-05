@@ -37,14 +37,36 @@ SPECIAL_TOKEN_MAP = {
             "USER": 2364,  # Detokenized to "user"
             "NEWLINE": 107,
             "END_OF_TURN": 106,
+            "EOS": 106,
             "ASSISTANT": 2028,  # Detokenized to "model"
         },
     },
+    "r1-0528": {
+        "names": ["r1-0528"],
+        "token_map": {
+            "BOS": 151643,
+            "USER": 151669,
+            "ASSISTANT": 151670,
+            "EOS": 151645,
+            "THINK_START": 151667,
+            "THINK_END": 151668,
+            "NEWLINE": 198,
+        },
+    },
+    "mistral":{
+        "names": ["mistral"],
+        "token_map": {
+            "BOS": 1,
+            "USER": 3, # [INST]
+            "ASSISTANT": 4, # [/INST]
+            "EOS": 2,
+        }
+    }
 }
 
 CHAT_TEMPLATE_MAP = {
     "r1-reasoning": {
-        "names": ["deepseek", "1776"],
+        "names": ["r1-distill", "1776"],
         "template": "r1-reasoning",
     },
     "llama-instruct": {
@@ -55,6 +77,14 @@ CHAT_TEMPLATE_MAP = {
         "names": ["gemma-3", "gemma-3-12bit"],
         "template": "gemma-3",
     },
+    "r1-0528": {
+        "names": ["r1-0528"],
+        "template": "r1-reasoning",
+    },
+    "mistral": {
+        "names": ["mistral"],
+        "template": "llama-instruct",
+    }
 }
 
 
@@ -177,8 +207,8 @@ def custom_batch_encoding(
             for user_message in user_messages
         ]
         return token_ids
-    elif match_chat_template(model_name, "llama-instruct"):
-        token_ids = custom_batch_encoding_Meta(
+    elif match_chat_template(model_name, "llama-instruct") or match_chat_template(model_name, "mistral"):
+        token_ids = custom_batch_encoding_Meta_Mistral(
             tokenizer=tokenizer,
             user_messages=user_messages,
             thinking_message=thinking_message,
@@ -203,7 +233,7 @@ def custom_batch_encoding(
         raise ValueError(f"Unsupported model: {model_name}.")
 
 
-def custom_batch_encoding_Meta(
+def custom_batch_encoding_Meta_Mistral(
     tokenizer: AutoTokenizer,
     user_messages: List[str],
     thinking_message: str = "",
@@ -213,38 +243,44 @@ def custom_batch_encoding_Meta(
     template: str = "chat",
 ) -> List[int]:
     """
-    Custom batch encoding for Meta Llama and other Llama-based models.
+    Custom batch encoding for Mistral, Meta Llama and other Llama-based models.
     """
     if template != "chat":
         raise ValueError(
-            f"Unsupported template: {template}. Only 'chat' template is supported for Llama models."
+            f"Unsupported template: {template}. Only 'chat' template is supported for Gemma 3 models."
         )
-    if thinking_message != "":
-        raise ValueError("Thinking message is not supported for Llama models.")
     if force_thought_skip:
-        raise ValueError("Forced thought skip is not supported for Llama models.")
+        raise ValueError("Forced thought skip is not supported for Gemma 3 models.")
 
     token_ids = []
     for user_message in user_messages:
-        user_message += " " + user_suffix
+        if user_suffix != "":
+            user_message += " " + user_suffix
+
+        system_message = ""
+        assistant_message = ""
         if assistant_prefill != "":
-            chat_ids = tokenizer.apply_chat_template(
-                [
-                    {"role": "user", "content": user_message},
-                    {"role": "assistant", "content": assistant_prefill},
-                ],
-                tokenize=True,
-                add_generation_prompt=False,
-            )[
-                :-1
-            ]  # Remove assistant EOS token so the assistant keeps generating
-        else:
-            # Standard template
-            chat_ids = tokenizer.apply_chat_template(
-                [{"role": "user", "content": user_message}],
-                tokenize=True,
-                add_generation_prompt=True,
-            )
+            assistant_message += assistant_prefill
+
+        if thinking_message != "":
+            system_message = f"Organize your thoughts within XML tags using <think> </think> before responding."
+            assistant_message += f"<think>\n{thinking_message}"
+
+        message_list = []
+        if system_message != "":
+            message_list.append({"role": "system", "content":  system_message})
+        message_list.append({"role": "user", "content": user_message})
+        if assistant_message != "":
+            message_list.append({"role": "assistant", "content": assistant_message})
+
+        chat_ids = tokenizer.apply_chat_template(
+            message_list,
+            tokenize=True,
+            add_generation_prompt=False,
+        )[
+            :-1
+        ]  # Remove end of sequence token so the assistant keeps generating
+
         token_ids.append(chat_ids)
     return token_ids
 
@@ -292,7 +328,8 @@ def custom_batch_encoding_Gemma3(
         chat_ids = tokenizer.apply_chat_template(
             message_list,
             tokenize=True,
-            add_generation_prompt=False,
+            add_generation_prompt=True,
+            return_tensors="pt"
         )[
             :-2
         ]  # Remove end of turn and newline token so the assistant keeps generating

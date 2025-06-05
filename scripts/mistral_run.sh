@@ -20,11 +20,14 @@ LOG_FILE="$PROJECT_ROOT/artifacts/log/crawler_debug_${TIMESTAMP}.log"
 echo "Log Dir: $LOG_FILE"
 
 # Run the crawler script with nohup and write to the log file
+
 nohup python exp/run_crawler.py \
-    --device "cuda" \
-    --model_path "/share/u/can/refusal-sft/output/llama3-colm-sft_alpaca_refusal_bl200_ratio1.0_with_reasons_lr2.0e-4_rank64_alpha16" \
-    --quantization_bits 0 \
-    --prompt_injection_location "assistant_prefix" \
+    --device "cuda:0" \
+    --cache_dir "/home/can/models/" \
+    --model_path "mistralai/Mistral-Small-24B-Instruct-2501" \
+    --quantization_bits "8" \
+    --prompt_injection_location "thought_prefix" \
+    "$@" \
     > "$LOG_FILE" 2>&1 &
 
 # Store the process ID

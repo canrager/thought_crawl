@@ -319,6 +319,27 @@ if __name__ == "__main__":
             plot_label="Claude-Haiku-3.5",
             model_name="claude-3-5-haiku-latest"
         ),
+        CrawlName(
+            title="0206-gemma3-12b-thought-prefix-qNone",
+            path="crawler_log_20250602_032140_gemma-3-12b-it_1samples_1000crawls_Truefilter_assistant_prefixprompt_qNone.json",
+            acronym="G",
+            plot_label="Gemma3-12B",
+            model_name="gemma-3-12b-it"
+        ),
+        CrawlName(
+            title="0603-mistral-thought-prefix-q8",
+            path="crawler_log_20250603_035857_Mistral-Small-24B-Instruct-2501_1samples_1000crawls_Truefilter_thought_prefixprompt_q8.json",
+            acronym="M",
+            plot_label="Mistral-24B",
+            model_name="mistralai/Mistral-Small-24B-Instruct-2501"
+        ),
+        CrawlName(
+            title="deepseek-r1-0528-qwen3-8b",
+            path="crawler_log_20250602_072604_DeepSeek-R1-0528-Qwen3-8B_1samples_1000crawls_Truefilter_thought_prefixprompt_qNone.json",
+            acronym="D",
+            plot_label="DeepSeek-R1-0528-Qwen3-8B",
+            model_name="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+        ),
     ]
     all_crawl_names_dict = {name.title: name for name in all_crawl_names}
 
@@ -357,9 +378,9 @@ if __name__ == "__main__":
     args.force_recompute = True
     args.debug = False
     args.crawl_titles = [
-        "0329-perplexity-70b-thought-prefix-q8", 
-        "0329-meta-70b-assistant-prefix-q8",
-        "0329-deepseek-70b-thought-prefix-q8",
+        # "0329-perplexity-70b-thought-prefix-q8", 
+        # "0329-meta-70b-assistant-prefix-q8",
+        # "0329-deepseek-70b-thought-prefix-q8",
         # "0407-claude-haiku-thought-prefix",
 
         # "0328-tulu-8b-direct-prompting-q0",
@@ -368,7 +389,10 @@ if __name__ == "__main__":
 
         # "0430-tulu-70b-assistant-prefix-q0"
         # "0509-tulu-70b-assistant-prefix-q0"
-        "0508-claude-haiku-thought-prefix"
+        # "0508-claude-haiku-thought-prefix"
+        # "0206-gemma3-12b-thought-prefix-qNone"
+        # "0603-mistral-thought-prefix-q8"
+        "deepseek-r1-0528-qwen3-8b"
     ]
 
     gt_fnames = {
