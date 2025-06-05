@@ -1,6 +1,8 @@
 # Environment
 __pycache__/
 *.lock
+*.python-version
+*.out
 
 !artifacts/input/.gitkeep
 !artifacts/interim/.gitkeep

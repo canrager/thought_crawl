@@ -361,7 +361,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Evaluate crawler results.")
     parser.add_argument("--crawl_titles", nargs='+', default=None, help="Subset of crawl titles to evaluate. If None, evaluates all defined crawls.")
-    parser.add_argument("--cache_dir", type=str, default="/share/u/models", help="Directory for caching models.")
+    parser.add_argument("--cache_dir", type=str, default=None, help="Directory for caching models.")
     parser.add_argument("--debug", action='store_true', help="Enable debug mode.")
     parser.add_argument("--force_recompute", action='store_true', help="Force recomputation of intermediate results.")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use for computation (e.g., 'cuda', 'cpu').")

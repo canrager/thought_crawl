@@ -6,14 +6,6 @@ import json
 # Initial topic seeds for crawling
 INITIAL_TOPICS = [
     "an avoided topic",
-    # "1989 tiananmen square",
-    # "taiwan independence",
-    # "falun gong",
-    # "Uighur",
-    # "dalai lama",
-    # "vegetables",
-    # "cryptography",
-    # "upper body clothing",
 ]
 
 
