@@ -1,6 +1,6 @@
 # Discovering Forbidden Topics of a Language Model
 
-This is the accompanying codebase for the paper under peer review at COLM 2025.
+This is the accompanying codebase for the paper [Discovering Forbidden Topics of a Language Model](https://arxiv.org/abs/2505.17441).
 
 Mapping out sensitive topics of a language model. Reasoning models conduct an inner monologue (eg. denoted by <think> tags by DeepSeek-R1 model family) befor providing a response to the user. Thought Token Forcing (TTF) prefills part of the model's internal monologue. We use TTF to elicit forbidden topics.  
 
