@@ -6,11 +6,10 @@ Mapping out sensitive topics of a language model. Reasoning models conduct an in
 
 ## Overview
 
-- `core/crawler.py` contains the core main implemenation of LLM-Crawler implements an iterative collection of restricted topics with multiple filters for deduplication.
+- `core/crawler.py` contains the core main of the Iterated Prefill Crawler.
 - `core/crawler_config.py` contains hyperparameters, including the set of prefill phrases used to elicit forbidden topics.
-- `exp/run_crawler.sh` provides 
 - `scripts/run_crawler.sh` is an example script for an end-to-end crawling run.
-- `exp/evaluate_crawler.sh` is the central script for aggregating refused sequences ("terms") into topic clusters, matching topic clusters with ground truth topics, and plotting.
+- `exp/evaluate_crawler.sh` is the central script for aggregating refused terms into topic clusters, matching topic clusters with ground truth topics, and plotting.
 
 
 ## Setup
